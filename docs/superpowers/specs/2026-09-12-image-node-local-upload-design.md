@@ -85,7 +85,7 @@ export function importLocalFiles(files: File[], origin: { x: number; y: number }
 - `kind` 由 `file.type` 前缀判定：`video/*` → video，`audio/*` → audio，其余 → image
 - `mime: file.type || 'application/octet-stream'`
 - `url` / `thumbUrl`：`urlOverride ?? URL.createObjectURL(file)`
-- `id: art_up_${nodeId}_${file.size}`（按节点 + 体积派生，避免多个上传互相撞 id —— HANDOFF §5 第 4 条记录过产物 id 冲突）
+- `id: art_up_${nodeId}_${file.size}_${sanitizedName}`，其中 `sanitizedName = file.name.replace(/[^a-zA-Z0-9]/g,'').slice(0,40) || 'f'` —— 仅按体积派生会在「同一节点上传两个字节数相同的不同文件」时撞 id（HANDOFF §5 第 4 条记录过产物 id 冲突），故并入文件名
 - `digest: local-${file.size}`，`meta: { uploaded: true, size: file.size, portrait: false }`
 
 **③ `importLocalFiles` 的细节**，等价于 `CanvasView.tsx:205-258` 的搬迁，保持既有行为不变：
