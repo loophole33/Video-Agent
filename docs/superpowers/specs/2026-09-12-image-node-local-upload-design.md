@@ -110,9 +110,10 @@ export function importLocalFiles(files: File[], origin: { x: number; y: number }
 
 在预览区与提示词 textarea 之间插入上传入口：
 
-- 隐藏 `<input type="file" accept="image/png,image/jpeg,image/webp" multiple />`，用 `useRef` 触发
+- 隐藏 `<input type="file" accept="image/png,image/jpeg,image/webp" />`，用 `useRef` 触发
+  - **刻意不加 `multiple`（Task 2 审查后修订）**：`runStore.patchRuntime` 是浅合并、会整体替换 `outputs`，故多选只会留下最后一个文件，其余 `blob:` URL 被孤立，而每个文件仍各弹一次成功 toast —— 等于**静默丢文件并谎报成功**。按钮文案本就是单数的「换一张（本地上传）」。若要支持多张，须先收集全部 artifact 再一次性写入，那是独立改动
 - 按钮：`Upload` 图标（lucide-react 已装）+ 文案「本地上传」；无产物时更醒目，已有产物时作为「换一张」
-- 变更处理：`Array.from(e.target.files ?? [])` → 逐个 `attachLocalFile(id, file)`（**只用 ②，不建节点**）；随后 `e.target.value = ''` 以便重复选同一文件
+- 变更处理：取 `e.target.files?.[0]`（单文件）→ `attachLocalFile(id, file)`（**只用 ②，不建节点**）；随后 `e.target.value = ''` 以便重复选同一文件
 - `onPointerDown={(e) => e.stopPropagation()}` 防拖动干扰（沿用既有 textarea 写法）
 - 上传后 `status` 置 `success`、`adapter` 标 `local-upload`，与拖入一致
 - 位置无需传给 `attachLocalFile`（写的是既有节点，不涉及落点）—— 这消除了 ③ 在节点内使用时的 `origin` 来源问题
@@ -159,7 +160,7 @@ export function importLocalFiles(files: File[], origin: { x: number; y: number }
 
 现有测试全部为纯函数（`tests/pure.test.ts`，25 例）。本特性主体是 UI 交互 + 浏览器 API，可纯测的部分是 `artifactFromFile`。
 
-**新增用例**（新增 `tests/localImport.test.ts`）：
+**新增用例**（新增 `tests/fileToArtifact.test.ts`）：
 1. `image/jpeg` → `kind='image'`，`mime='image/jpeg'`
 2. `image/png` → `kind='image'`
 3. `video/mp4` → `kind='video'`
@@ -168,7 +169,19 @@ export function importLocalFiles(files: File[], origin: { x: number; y: number }
 6. `digest` 对同一文件稳定（`local-<size>`）
 7. `meta.uploaded === true`
 
-`artifactFromFile` 需接受最小 `File` 形状（`{ name, size, type }`）以便在 node 环境测试 —— 实现只读这三个字段 + `URL.createObjectURL`。**为使测试无需真实 `File`/`URL.createObjectURL`，`artifactFromFile` 接受可选的 `urlOverride` 注入参数**（默认 `URL.createObjectURL(file)`）—— 避免为测试引入 jsdom 依赖。
+`artifactFromFile` 需接受最小 `File` 形状（`{ name, size, type, lastModified }`）以便在 node 环境测试 —— 实现只读这四个字段 + `URL.createObjectURL`。**为使测试无需真实 `File`/`URL.createObjectURL`，`artifactFromFile` 接受可选的 `urlOverride` 注入参数**（默认 `URL.createObjectURL(file)`）—— 避免为测试引入 jsdom 依赖。
+
+**`localImport.ts` 的 store 层测试（Task 2 审查后新增，`tests/localImport.test.ts`）**：
+
+先前的设计理由是「store 写入 + UI 接线，无法纯测」—— 该理由**只对 UI 一半成立**。`localImport.ts` 是纯 store 逻辑、不经 React 渲染，zustand 可直接 `getState()`，且本仓库 vitest 已配好、node 环境本就能构造真实 `File`。因此本任务最核心的不变量（「点击上传不得新建节点」）不该只靠不可复现的浏览器手测。
+
+必须断言（用真实 `new File([bytes], 'a.png', { type: 'image/png' })`）：
+1. `attachLocalFile('n_x', f)` 后 `useGraph.getState().graph.nodes` 长度**不变**（这是本任务最容易写错的一点）
+2. 写入的产物 id 以 `art_up_n_x_` 开头 —— 证明 key 的是**被点击**的节点
+3. `runMeta` 与 `{ attempt: 1, latencyMs: 0, costCny: 0, adapter: 'local-upload', model: '—' }` 深度相等（顺带钉死与拖入路径的逐字一致性，防未来漂移）
+4. `importLocalFiles([f], {x,y})` 恰好**新增 1 个**节点，且该节点 id 与产物 id 中嵌入的节点 id 一致，并生成 `g_media` 归组
+
+仍无法被上述测试覆盖的是 `basic.tsx` 的接线（`input.onChange` → `attachLocalFile`），那部分需 jsdom/RTL（新依赖）或把 handler 抽成可测函数；本次接受其保留为手动验证。
 
 **手动验证**（UI 部分，不产生费用）：
 1. `npm run dev` → 拖一个图像节点到画布 → 点「本地上传」→ 选一张本机 PNG → 预览立即出图
@@ -201,9 +214,10 @@ export function importLocalFiles(files: File[], origin: { x: number; y: number }
 ## 9. 验收标准
 
 1. `npx tsc --noEmit` 通过
-2. `npm test` 通过（原 25 例 + 新增 ≥7 例）
+2. `npm test` 通过（原 25 例 + `fileToArtifact` 15 例 + `localImport` ≥4 例）
 3. `npm run build` 通过
 4. 未改网关 → 无需跑 `npm run verify:gateway`；但**不得**破坏其既有 55/55（本设计零后端改动，风险为零）
 5. 手动：图像节点内可点选本机图片并立即预览；再选可替换（不新建节点）
-6. `CanvasView.tsx` 拖入行为回归不变（共用 ①③，行为等价）
-7. **无重复实现**：`kind`/`mime` 判定与 ArtifactRef 构造只存在于 `artifactFromFile` 一处；两入口均调用它（这是本设计的主要收益，优先于行数）
+6. **确定性测试覆盖核心不变量**：上传后画布节点数不变、产物 key 的是被点击节点（见 §7 的 `localImport` 用例）
+7. `CanvasView.tsx` 拖入行为回归不变（共用 ①③，行为等价）
+8. **无重复实现**：`kind`/`mime` 判定与 ArtifactRef 构造只存在于 `artifactFromFile` 一处；两入口均调用它（这是本设计的主要收益，优先于行数）

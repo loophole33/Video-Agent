@@ -29,6 +29,7 @@
 | `src/registry/specs/basic.tsx` | 图像节点 Body 加上传按钮 | 改（第 118-159 行区域） |
 | `src/canvas/CanvasView.tsx` | `onDrop` 文件分支改为调用 `importLocalFiles` | 改（第 202-258 行） |
 | `tests/fileToArtifact.test.ts` | 纯函数单测 | **新建** |
+| `tests/localImport.test.ts` | store 层确定性测试（核心不变量） | **新建**（Task 2） |
 
 **为什么拆成两个新文件而不是一个**：`fileToArtifact.ts` 零依赖（可被 node 环境测试），`localImport.ts` 依赖 store 与 `nodeRegistry`（会牵入 React 整条链）。合在一起会让纯函数测试被迫加载整个 UI 依赖树。
 
@@ -238,16 +239,18 @@ git commit -m "feat(canvas): add fileToArtifact pure converter with unit tests"
 
 **Files:**
 - Create: `src/canvas/localImport.ts`
-- Modify: `src/registry/specs/basic.tsx:118-159`（`imageSpec.Body`）
-- Modify: `src/registry/specs/basic.tsx:2`（图标 import）
+- Create: `tests/localImport.test.ts`（store 层确定性测试 —— Task 2 审查后补，见下）
+- Modify: `src/registry/specs/basic.tsx`（`imageSpec.Body`，及顶部图标 import = 第 2 行）
 
 **Interfaces:**
-- Consumes: `artifactFromFile` / `MediaKind` from Task 1
+- Consumes: `artifactFromFile` / `kindFromMime` from Task 1
 - Produces:
   - `attachLocalFile(nodeId: string, file: File): void` — 写入**既有**节点的 `outputs.out`
   - `importLocalFiles(files: File[], origin: { x: number; y: number }): void` — **新建**节点并归组
 
 **关键约束（本任务最容易写错的地方）**：节点内的上传按钮**必须**调 `attachLocalFile`，**绝不能**调 `importLocalFiles`。后者会新建节点 —— 用户点击的节点仍然是空的，画布上却凭空多一个节点。
+
+**为什么必须有 `tests/localImport.test.ts`**：早先的理由是「store 写入 + UI 接线无法纯测」，该理由**只对 UI 一半成立**。`localImport.ts` 是纯 store 逻辑、不经 React 渲染，zustand 可直接 `getState()`，node 环境本就能构造真实 `File`。本任务的核心不变量（上传不得新建节点）不该只靠不可复现的浏览器手测。
 
 - [ ] **Step 1: 写 `src/canvas/localImport.ts`**
 
@@ -266,7 +269,7 @@ import { useGraph } from '../store/graphStore';
 import { useRun } from '../store/runStore';
 import { useUi } from '../store/uiStore';
 import type { MvaNode } from '../types/graph';
-import { artifactFromFile } from './fileToArtifact';
+import { artifactFromFile, kindFromMime } from './fileToArtifact';
 
 /** 写入已有节点的产物（runMeta 与既有拖入行为逐字一致） */
 export function attachLocalFile(nodeId: string, file: File): void {
@@ -284,15 +287,14 @@ export function importLocalFiles(files: File[], origin: { x: number; y: number }
   if (!files.length) return;
   const apply = useGraph.getState().applyLocal;
   files.forEach((file, i) => {
-    const kind = artifactFromFile(file, 'tmp').kind;
-    const spec = nodeRegistry.get(kind);
+    const spec = nodeRegistry.get(kindFromMime(file.type || 'application/octet-stream'));
     const id = `n_${Math.random().toString(36).slice(2, 9)}`;
     const node: MvaNode = {
       id,
-      type: kind,
+      type: spec.id,
       position: { x: origin.x + i * 40, y: origin.y + i * 40 },
       data: {
-        type: kind,
+        type: spec.id,
         label: file.name.slice(0, 18),
         params: { ...spec.defaultParams },
         status: 'idle',
@@ -302,11 +304,10 @@ export function importLocalFiles(files: File[], origin: { x: number; y: number }
         ui: {},
       },
     };
-    // 产物 id 需要真实节点 id，故这里用建好的 id 重算一次
-    const { kind: k2, artifact } = artifactFromFile(file, id);
+    const { kind, artifact } = artifactFromFile(file, id);
     useRun.getState().patchRuntime(id, {
       status: 'success',
-      outputs: { out: { type: k2, items: [artifact] } },
+      outputs: { out: { type: kind, items: [artifact] } },
       runMeta: { attempt: 1, latencyMs: 0, costCny: 0, adapter: 'local-upload', model: '—' },
     });
     apply(
@@ -321,7 +322,8 @@ export function importLocalFiles(files: File[], origin: { x: number; y: number }
 }
 ```
 
-> 注意 `artifactFromFile(file, 'tmp')` 的第一次调用只为拿 `kind` 决定节点类型；拿到真实 `id` 后重算产物（产物 id 必须含真实节点 id）。第二次调用会再产生一个 `blob:` URL —— 第一次的 URL 被丢弃，属可接受的极小泄漏（与既有行为同级）。
+> `artifactFromFile` 每个文件**只调用一次**（用 `kindFromMime` 决定节点类型），避免为探 kind 而多造一个被丢弃的 `blob:` URL。
+> 节点 `type` 用 `spec.id` 而非直接取 mime 推导值，防止 `kind` 与注册表 id 未来漂移。
 
 - [ ] **Step 2: 给图像节点加上传按钮**
 
@@ -344,8 +346,9 @@ import { FileText, Image as ImageIcon, Upload, Video, AudioLines } from 'lucide-
     const isPlaceholder = items.some((i) => i.meta?.placeholder === true);
     const isUploaded = items.some((i) => i.meta?.uploaded === true);
     const pick = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(e.target.files ?? []);
-      files.forEach((f) => attachLocalFile(id, f));
+      // 单选：patchRuntime 是浅合并、会整体替换 outputs，多选只会留下最后一个文件
+      const file = e.target.files?.[0];
+      if (file) attachLocalFile(id, file);
       e.target.value = ''; // 允许再次选择同一个文件
     };
     return (
@@ -382,7 +385,6 @@ import { FileText, Image as ImageIcon, Upload, Video, AudioLines } from 'lucide-
           ref={fileRef}
           type="file"
           accept="image/png,image/jpeg,image/webp"
-          multiple
           className="hidden"
           onChange={pick}
         />
@@ -421,28 +423,151 @@ import { attachLocalFile } from '../../canvas/localImport';
 
 > 第 1 行原本是 `import { useState } from 'react';`，改为同时引入 `useRef`。
 
-- [ ] **Step 3: 类型检查**
+- [ ] **Step 3: 补 `tests/localImport.test.ts`（store 层确定性测试）**
+
+> 注意：代码此时已写好，所以这是**补充测试**而非 TDD 红→绿。写完后必须全绿；若某条不绿，说明实现与规格不符，**改实现**而不是放松断言。
+
+新建 `tests/localImport.test.ts`：
+
+```ts
+/**
+ * localImport 的 store 层确定性测试。
+ * 覆盖本任务最核心的不变量：节点内上传【不得】新建节点。
+ * 不需要 jsdom —— zustand 直接 getState()，node 环境可构造真实 File。
+ */
+import { beforeEach, describe, expect, it } from 'vitest';
+import { attachLocalFile, importLocalFiles } from '../src/canvas/localImport';
+import { useGraph } from '../src/store/graphStore';
+import { useRun } from '../src/store/runStore';
+
+function realFile(name = 'a.png', bytes = 32, type = 'image/png'): File {
+  return new File([new Uint8Array(bytes)], name, { type });
+}
+
+/** 图里塞一个最小可用的 image 节点，模拟「用户点击的那个节点」 */
+function seedImageNode(id = 'n_x'): void {
+  useGraph.setState((s) => {
+    s.graph.nodes.push({
+      id,
+      type: 'image',
+      position: { x: 0, y: 0 },
+      data: {
+        type: 'image',
+        label: id,
+        params: {},
+        status: 'idle',
+        locked: false,
+        enabled: true,
+        createdBy: 'user',
+        ui: {},
+      },
+    } as never);
+  });
+}
+
+beforeEach(() => {
+  useGraph.setState((s) => {
+    s.graph.nodes = [];
+    s.graph.edges = [];
+    s.graph.groups = [];
+  });
+  useRun.setState({ runtime: {} });
+});
+
+describe('attachLocalFile —— 写入既有节点，绝不新建节点', () => {
+  it('节点数不变（本任务最容易写错的一点）', () => {
+    seedImageNode('n_x');
+    const before = useGraph.getState().graph.nodes.length;
+    attachLocalFile('n_x', realFile());
+    expect(useGraph.getState().graph.nodes.length).toBe(before);
+  });
+
+  it('产物 id key 的是被点击的节点', () => {
+    seedImageNode('n_x');
+    attachLocalFile('n_x', realFile());
+    const out = useRun.getState().runtime['n_x']?.outputs?.out;
+    expect(out && 'items' in out).toBe(true);
+    expect(out && 'items' in out ? out.items[0].id : '').toMatch(/^art_up_n_x_/);
+  });
+
+  it('runMeta 与拖入路径逐字一致（防未来漂移）', () => {
+    seedImageNode('n_x');
+    attachLocalFile('n_x', realFile());
+    expect(useRun.getState().runtime['n_x']?.runMeta).toEqual({
+      attempt: 1,
+      latencyMs: 0,
+      costCny: 0,
+      adapter: 'local-upload',
+      model: '—',
+    });
+  });
+
+  it('状态置 success，且 meta.uploaded=true', () => {
+    seedImageNode('n_x');
+    attachLocalFile('n_x', realFile());
+    const rt = useRun.getState().runtime['n_x'];
+    expect(rt?.status).toBe('success');
+    const out = rt?.outputs?.out;
+    expect(out && 'items' in out ? out.items[0].meta?.uploaded : undefined).toBe(true);
+  });
+});
+
+describe('importLocalFiles —— 新建节点并归组', () => {
+  it('恰好新增 1 个节点，且节点 id 与产物 id 中嵌入的一致', () => {
+    importLocalFiles([realFile('drop.png')], { x: 10, y: 20 });
+    const nodes = useGraph.getState().graph.nodes;
+    expect(nodes.length).toBe(1);
+    const node = nodes[0];
+    const out = useRun.getState().runtime[node.id]?.outputs?.out;
+    const artId = out && 'items' in out ? out.items[0].id : '';
+    expect(artId).toContain(node.id);
+  });
+
+  it('归入 g_media 组', () => {
+    importLocalFiles([realFile('drop.png')], { x: 10, y: 20 });
+    const groups = useGraph.getState().graph.groups;
+    expect(groups.some((g) => g.id === 'g_media')).toBe(true);
+  });
+
+  it('多个文件各自建节点', () => {
+    importLocalFiles([realFile('a.png'), realFile('b.png'), realFile('c.png')], { x: 0, y: 0 });
+    expect(useGraph.getState().graph.nodes.length).toBe(3);
+  });
+
+  it('空数组不产生副作用', () => {
+    importLocalFiles([], { x: 0, y: 0 });
+    expect(useGraph.getState().graph.nodes.length).toBe(0);
+  });
+});
+```
+
+- [ ] **Step 4: 跑新测试确认全绿**
+
+Run: `cmd /c "npx vitest run tests/localImport.test.ts"`
+Expected: PASS — 8 例全绿。若有失败，改实现使断言成立（规格优先于便利）。
+
+- [ ] **Step 5: 类型检查**
 
 Run: `cmd /c "npx tsc --noEmit"`
 Expected: 退出码 0，无输出
 
-若报 `attachLocalFile` 循环引用相关错误，检查 `localImport.ts` 是否只 import 了 `nodeRegistry` 的具名导出（不应 import `src/registry/index.ts` 之外的东西）。
+若报 ESM 循环引用相关错误，检查 `localImport.ts` 是否只在函数体内访问 `nodeRegistry`（模块顶层解引用才会炸）。
 
-- [ ] **Step 4: 跑全量测试确认无回归**
+- [ ] **Step 6: 跑全量测试确认无回归**
 
 Run: `cmd /c "npm test"`
-Expected: PASS — 原 25 例 + Task 1 的 14 例 = 39 例
+Expected: PASS — 25（既有）+ 15（Task 1）+ 8（本任务）= **48 例**
 
-- [ ] **Step 5: 手动验证（需 `npm run dev` 在跑）**
+- [ ] **Step 7: 手动验证（需 `npm run dev` 在跑）**
 
 在 http://localhost:5173 上：
 1. 从左侧拖一个「图像生成」节点到画布
 2. 点节点内「本地上传」→ 选一张本机 PNG
 3. **预期**：预览立即出图，节点角标 `DONE`，出现「本地素材」标签，footer 显示 `local-upload`
 4. 再点「换一张（本地上传）」→ 选另一张 → **预期**：预览替换
-5. **关键回归**：画布上的节点总数**没有增加**（证明走的是 `attachLocalFile` 而不是 `importLocalFiles`）
+5. **关键回归**：画布上的节点总数**没有增加**（此项已由 Step 3 的测试确定性覆盖，此处仅作端到端确认）
 
-- [ ] **Step 6: 提交**
+- [ ] **Step 8: 提交**
 
 ```bash
 git add src/canvas/localImport.ts src/registry/specs/basic.tsx
@@ -530,7 +655,7 @@ cmd /c "npm test"
 cmd /c "npm run build"
 ```
 
-Expected: 三者全部退出码 0；`npm test` 39 例通过；`npm run build` 产出 `dist/`
+Expected: 三者全部退出码 0；`npm test` **48 例**通过；`npm run build` 产出 `dist/`
 
 **不需要**跑 `npm run verify:gateway`（零后端改动）。可选：若网关在线，确认 `/healthz` 仍 `warnings: []`。
 
@@ -582,7 +707,7 @@ git commit -m "docs: record local upload feature and remaining asset-upload gaps
 | §4.3 图像节点 Body 加上传按钮 | Task 2 |
 | §5 数据流 | Task 1+2 |
 | §6 错误处理（取消选择 / 空 mime / 重复选同一文件） | Task 2 `pick`（空数组 forEach 无副作用、`e.target.value=''`）；Task 1 空 mime 用例 |
-| §7 测试策略（≥7 例） | Task 1 —— 实交 14 例 |
+| §7 测试策略（≥7 例） | Task 1 —— 实交 15 例；Task 2 —— 另加 store 层 8 例 |
 | §8 已知边界（不解决） | Task 4 写入 HANDOFF §6 |
 | §9 验收标准 | Task 4 Step 1 |
 
