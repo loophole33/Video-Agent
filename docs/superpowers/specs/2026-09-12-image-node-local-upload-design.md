@@ -85,7 +85,9 @@ export function importLocalFiles(files: File[], origin: { x: number; y: number }
 - `kind` 由 `file.type` 前缀判定：`video/*` → video，`audio/*` → audio，其余 → image
 - `mime: file.type || 'application/octet-stream'`
 - `url` / `thumbUrl`：`urlOverride ?? URL.createObjectURL(file)`
-- `id: art_up_${nodeId}_${file.size}_${sanitizedName}`，其中 `sanitizedName = file.name.replace(/[^a-zA-Z0-9]/g,'').slice(0,40) || 'f'` —— 仅按体积派生会在「同一节点上传两个字节数相同的不同文件」时撞 id（HANDOFF §5 第 4 条记录过产物 id 冲突），故并入文件名
+- `id: art_up_${nodeId}_${file.size}_${file.lastModified}_${sanitizedName}`，其中 `sanitizedName = file.name.replace(/[^a-zA-Z0-9]/g,'').slice(0,40) || 'f'`
+  - 仅按体积派生会在「同一节点上传两个字节数相同的不同文件」时撞 id（HANDOFF §5 第 4 条记录过产物 id 冲突），故并入文件名
+  - **并入 `lastModified` 的原因（Task 1 审查发现）**：`sanitizeName` 会剥掉所有非字母数字字符，因此中文文件名（`图片.jpg` / `照片.jpg` / `风景.jpg`）**全部塌缩为扩展名 `jpg`** —— 文件名分量对 CJK 命名实际失效。本应用面向中文用户，且手机/微信导出的图常是 `image(1).jpg` 这类同名文件，「同节点 + 同体积 + 同名」是真实可达路径而非理论情况。`file.lastModified` 同步可得、无需读文件内容，恰好消解该窗口
 - `digest: local-${file.size}`，`meta: { uploaded: true, size: file.size, portrait: false }`
 
 **③ `importLocalFiles` 的细节**，等价于 `CanvasView.tsx:205-258` 的搬迁，保持既有行为不变：
