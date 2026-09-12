@@ -1,6 +1,7 @@
-﻿import { useState } from 'react';
-import { FileText, Image as ImageIcon, Video, AudioLines } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { FileText, Image as ImageIcon, Upload, Video, AudioLines } from 'lucide-react';
 import type { NodeTypeSpec } from '../types';
+import { attachLocalFile } from '../../canvas/localImport';
 import { EmptyFrame, ImagePreview, itemsOf, JsonPreview, TextPreview, VideoPreview, AudioPreview } from '../../nodes/Preview';
 import { Segmented, Slider } from '../../nodes/controls';
 import { cn } from '../../lib/utils';
@@ -115,11 +116,19 @@ export const imageSpec: NodeTypeSpec = {
     },
     { key: 'refStrength', label: '参考强度', kind: 'slider', min: 0, max: 1, step: 0.05, hint: '越高越贴参考图' },
   ],
-  Body: ({ data, outputs, inputs, setParam, setUi }) => {
+  Body: ({ id, data, outputs, inputs, setParam, setUi }) => {
     const items = itemsOf(outputs?.out);
+    const fileRef = useRef<HTMLInputElement>(null);
     const upstream = itemsOf(inputs.prompt).length ? '' : inputs.prompt?.type === 'text' ? inputs.prompt.text : '';
     const isReal = items.some((i) => i.meta?.real === true);
     const isPlaceholder = items.some((i) => i.meta?.placeholder === true);
+    const isUploaded = items.some((i) => i.meta?.uploaded === true);
+    const pick = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files ?? []);
+      // ⚠️ 必须 attachLocalFile（写【本】节点），绝不能 importLocalFiles（会新建节点）
+      files.forEach((f) => attachLocalFile(id, f));
+      e.target.value = ''; // 允许再次选择同一个文件
+    };
     return (
       <div className="space-y-2">
         {items.length ? (
@@ -129,7 +138,7 @@ export const imageSpec: NodeTypeSpec = {
             onIndex={(i) => setUi({ previewIndex: i })}
           />
         ) : (
-          <EmptyFrame label="无关键帧" hint="运行生成或钉入参考图" />
+          <EmptyFrame label="无关键帧" hint="本地上传或运行生成" />
         )}
         <div className="flex items-center gap-1">
           {isReal && !isPlaceholder && (
@@ -142,8 +151,32 @@ export const imageSpec: NodeTypeSpec = {
               占位画面 · 未配置模型
             </span>
           )}
+          {isUploaded && (
+            <span className="rounded-sm border border-bay-700 bg-bay-900/5 px-1.5 py-[1px] font-mono text-[11px] text-bay-900/60">
+              本地素材
+            </span>
+          )}
           {items.length > 1 && <span className="tc">共 {items.length} 张</span>}
         </div>
+
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          multiple
+          className="hidden"
+          onChange={pick}
+        />
+        <button
+          type="button"
+          className="flex w-full items-center justify-center gap-1 rounded border border-bay-600 bg-bone-50 px-2 py-1 font-mono text-[12px] text-bay-900/70 transition-colors hover:border-sodium-600 hover:text-sodium-700"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => fileRef.current?.click()}
+        >
+          <Upload className="size-3" />
+          {items.length ? '换一张（本地上传）' : '本地上传'}
+        </button>
+
         <textarea
           className="field h-[46px] resize-none"
           placeholder={upstream ? `编译自上游：${upstream.slice(0, 30)}…` : '画面描述…'}
