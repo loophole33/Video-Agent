@@ -5,9 +5,9 @@
 import { describe, expect, it } from 'vitest';
 import { artifactFromFile, sanitizeName } from '../src/canvas/fileToArtifact';
 
-/** 最小 File 形状 —— 实现只读 name/size/type 三个字段 */
-function fakeFile(name: string, size: number, type: string): File {
-  return { name, size, type } as unknown as File;
+/** 最小 File 形状 —— 实现只读 name/size/type/lastModified 四个字段 */
+function fakeFile(name: string, size: number, type: string, lastModified = 0): File {
+  return { name, size, type, lastModified } as unknown as File;
 }
 
 const URL_STUB = 'blob:http://localhost:5173/fake-1';
@@ -62,14 +62,21 @@ describe('artifactFromFile', () => {
   });
 
   it('同一节点上传两个同体积的不同文件 → id 不同（不撞 id）', () => {
-    const a = artifactFromFile(fakeFile('cat.jpg', 500, 'image/jpeg'), 'n_1', URL_STUB).artifact;
-    const b = artifactFromFile(fakeFile('dog.jpg', 500, 'image/jpeg'), 'n_1', URL_STUB).artifact;
+    const a = artifactFromFile(fakeFile('cat.jpg', 500, 'image/jpeg', 1000), 'n_1', URL_STUB).artifact;
+    const b = artifactFromFile(fakeFile('dog.jpg', 500, 'image/jpeg', 2000), 'n_1', URL_STUB).artifact;
+    expect(a.id).not.toBe(b.id);
+  });
+
+  it('中文文件名塌缩为同一 sanitizedName 时，靠 lastModified 仍不撞 id', () => {
+    // 图片.jpg / 照片.jpg 都 sanitize 成 'jpg' —— 这是本用例存在的理由
+    const a = artifactFromFile(fakeFile('图片.jpg', 500, 'image/jpeg', 1000), 'n_1', URL_STUB).artifact;
+    const b = artifactFromFile(fakeFile('照片.jpg', 500, 'image/jpeg', 2000), 'n_1', URL_STUB).artifact;
     expect(a.id).not.toBe(b.id);
   });
 
   it('同一节点重复上传同一文件 → id 稳定（幂等）', () => {
-    const a = artifactFromFile(fakeFile('cat.jpg', 500, 'image/jpeg'), 'n_1', URL_STUB).artifact;
-    const b = artifactFromFile(fakeFile('cat.jpg', 500, 'image/jpeg'), 'n_1', URL_STUB).artifact;
+    const a = artifactFromFile(fakeFile('cat.jpg', 500, 'image/jpeg', 1000), 'n_1', URL_STUB).artifact;
+    const b = artifactFromFile(fakeFile('cat.jpg', 500, 'image/jpeg', 1000), 'n_1', URL_STUB).artifact;
     expect(a.id).toBe(b.id);
   });
 

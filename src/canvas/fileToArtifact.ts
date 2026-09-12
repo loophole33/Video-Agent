@@ -32,8 +32,10 @@ export function artifactFromFile(
   const kind = kindFromMime(mime);
   const url = urlOverride ?? URL.createObjectURL(file);
   const artifact: ArtifactRef = {
-    // 并入文件名：仅按体积派生会在「同节点上传两个同字节数文件」时撞 id
-    id: `art_up_${nodeId}_${file.size}_${sanitizeName(file.name)}`,
+    // 并入体积 + lastModified + 文件名：仅按体积派生会在「同节点上传两个同字节数文件」时撞 id。
+    // lastModified 是必需的 —— sanitizeName 会剥掉所有非字母数字字符，中文文件名（图片.jpg）
+    // 会塌缩为扩展名 'jpg'，使文件名分量对 CJK 命名失效（Task 1 审查发现）。
+    id: `art_up_${nodeId}_${file.size}_${file.lastModified}_${sanitizeName(file.name)}`,
     kind,
     url,
     thumbUrl: url,
