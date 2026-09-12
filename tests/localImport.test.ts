@@ -45,9 +45,10 @@ beforeEach(() => {
 describe('attachLocalFile —— 写入既有节点，绝不新建节点', () => {
   it('节点数不变（本任务最容易写错的一点）', () => {
     seedImageNode('n_x');
-    const before = useGraph.getState().graph.nodes.length;
     attachLocalFile('n_x', realFile());
-    expect(useGraph.getState().graph.nodes.length).toBe(before);
+    const nodes = useGraph.getState().graph.nodes;
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].id).toBe('n_x');
   });
 
   it('产物 id key 的是被点击的节点', () => {
@@ -78,6 +79,24 @@ describe('attachLocalFile —— 写入既有节点，绝不新建节点', () =>
     const out = rt?.outputs?.out;
     expect(out && 'items' in out ? out.items[0].meta?.uploaded : undefined).toBe(true);
   });
+
+  it('与拖入路径产出真正一致（不是各自钉字面量）', () => {
+    seedImageNode('n_x');
+    const f = realFile('same.png');
+    attachLocalFile('n_x', f);
+    importLocalFiles([f], { x: 0, y: 0 });
+
+    const rt = useRun.getState().runtime;
+    const viaButton = rt['n_x'];
+    const viaDrop = Object.entries(rt).find(([id]) => id !== 'n_x')?.[1];
+
+    expect(viaDrop).toBeDefined();
+    expect(viaDrop!.runMeta).toEqual(viaButton.runMeta);
+    // 产物除 id（内含各自节点 id）外应逐字段一致
+    const a = viaButton.outputs!.out as { items: { id: string }[] };
+    const b = viaDrop!.outputs!.out as { items: { id: string }[] };
+    expect({ ...b.items[0], id: '' }).toEqual({ ...a.items[0], id: '' });
+  });
 });
 
 describe('importLocalFiles —— 新建节点并归组', () => {
@@ -98,8 +117,11 @@ describe('importLocalFiles —— 新建节点并归组', () => {
   });
 
   it('多个文件各自建节点', () => {
-    importLocalFiles([realFile('a.png'), realFile('b.png'), realFile('c.png')], { x: 0, y: 0 });
-    expect(useGraph.getState().graph.nodes.length).toBe(3);
+    const origin = { x: 10, y: 20 };
+    importLocalFiles([realFile('a.png'), realFile('b.png'), realFile('c.png')], origin);
+    const nodes = useGraph.getState().graph.nodes;
+    expect(nodes).toHaveLength(3);
+    expect(nodes[1].position).toEqual({ x: origin.x + 40, y: origin.y + 40 });
   });
 
   it('空数组不产生副作用', () => {

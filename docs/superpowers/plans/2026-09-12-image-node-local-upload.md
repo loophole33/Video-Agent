@@ -13,11 +13,11 @@
 - **命令必须经 `cmd /c` 执行**：本机 PowerShell 执行策略禁止 `npm.ps1` / `npx.ps1`，直接 `npm test` 会报 `UnauthorizedAccess`。统一写 `cmd /c "npm test"`。
 - 门禁命令：`cmd /c "npx tsc --noEmit"`、`cmd /c "npm test"`、`cmd /c "npm run build"`。
 - 本次**零后端改动** → 不需要跑 `npm run verify:gateway`。
-- 产物 id 前缀沿用既有约定 `art_up_`（见 `src/canvas/CanvasView.tsx:237`）。
+- 产物 id 前缀沿用既有约定 `art_up_`（见 `src/canvas/fileToArtifact.ts`）。
 - `meta.uploaded === true`、`runMeta.adapter === 'local-upload'`、`runMeta.model === '—'` 必须与既有拖入行为逐字一致。
 - 不引入新依赖（lucide-react / zustand / immer 均已装）。
 - **`tsc --noEmit` 不会报告未使用的 import** —— 本仓库 `tsconfig.json` 未开启 `noUnusedLocals`（`strict` 不含它）。删除代码后清理 import 必须**手工 grep 数引用**，不要把 tsc 退出码 0 当作"import 干净"的证据。（Task 1、Task 3 各出现一次此误判，故写入全局约束。）
-- `artifactFromFile` 必须能在 node 环境（无 jsdom）下测试 → 只读 `file.name` / `file.size` / `file.type` 三个字段，`URL.createObjectURL` 走可注入参数。
+- `artifactFromFile` 必须能在 node 环境（无 jsdom）下测试 → 只读 `file.name` / `file.size` / `file.type` / `file.lastModified` 四个字段（含 lastModified），`URL.createObjectURL` 走可注入参数。
 
 ---
 
@@ -61,7 +61,7 @@
 import { describe, expect, it } from 'vitest';
 import { artifactFromFile, sanitizeName } from '../src/canvas/fileToArtifact';
 
-/** 最小 File 形状 —— 实现只读 name/size/type 三个字段 */
+/** 最小 File 形状 —— 实现只读 name/size/type/lastModified 四个字段 */
 function fakeFile(name: string, size: number, type: string, lastModified = 0): File {
   return { name, size, type, lastModified } as unknown as File;
 }
@@ -735,3 +735,7 @@ git commit -m "docs: record local upload feature and remaining asset-upload gaps
 - `BaseNode.tsx:154` 在定义前调用 `patchNode`（第 360 行，函数声明，具提升）—— 合法，无需改。
 - `CanvasView.tsx` 替换后 `nodeRegistry`（第 140/149/179/181/356/395 行）与 `useRun` 仍被使用 —— Task 3 Step 3 已改为「按 tsc 报错移除」，不再要求无脑删。
 - 循环依赖：`src/registry/specs/basic.tsx` → `src/canvas/localImport.ts` → `src/registry/index.ts`（`nodeRegistry`），而 `index.ts` 会 import 各 spec —— 属 ESM 循环。既有代码已有同类结构（`basic.tsx:7` 从 `../../engine/realVideo` 取 `useModelStore`，而 engine 层又依赖 registry），故沿用既有模式。**若 Step 3 的 tsc 或运行时报出循环初始化为 `undefined`**，退路是：把 `importLocalFiles` 里对 `nodeRegistry` 的依赖改为由调用方传入 spec（`CanvasView` 自己已 import 了 `nodeRegistry`）—— `attachLocalFile` 根本不需要 `nodeRegistry`，不要为它引入。静态 import 无法「惰性化」，`attachLocalFile` 是同步函数，不可用 `await import()`。
+
+**5. 教训（最终审查发现）**：本次 10 项遗留 Minor 中有 4 项是同一类缺陷 —— **断言恒真、无法失败**
+（空数组用例、捕获式 before、只钉字面量而非路径间对比、`as never` 抹掉类型检查）。
+今后写测试时对每个新用例自问一句：**改哪一行代码能让它变红？** 答不上来就说明这个断言没在保护任何东西。

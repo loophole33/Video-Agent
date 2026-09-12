@@ -136,6 +136,9 @@ D:\vtest
     - 且**不能当 i2v 首帧**：`src/engine/realVideo.ts:54` 的 `backendPath()` 只剥 `/mva-api` 前缀，
       厂商侧 `to_vendor_ref()`（`apps/api/mva/adapters/video/dashscope_video.py:49`）只认 `data:` / `http` / `/assets/`，
       `blob:` 会原样透传给厂商 → 不可解析。
+    - 上传产物**只写 runtime、不进 undo 栈**：Ctrl+Z 撤销的是上一个**图**操作（可能把刚上传的节点删掉）；
+      且**整图运行时会照旧调厂商重新生成并追加**为新的一张（上传图不会被当作"已就绪的产物"跳过生成）——
+      即上传目前是"能出图给人看"，不是"能省钱/替代生成"。
 
 ---
 
@@ -149,10 +152,10 @@ D:\vtest
 6. **价格表校准**：按真实账单改 `MVA_PRICE_VIDEO_SEC` 等（现在按 ¥0.45/s 记账，3 段就 ¥6.75，接近 ¥8 预算）
 7. **后端上传接口**（`POST /api/v1/assets`，复用 `storage.save_bytes()` 内容寻址）：
    现状上传图是 `blob:` URL，刷新即失效、且无法当 i2v 首帧（`to_vendor_ref` 只认 `data:`/`http`/`/assets/`）。
-   浏览器把字节 POST 给服务端落盘、图里改引用稳定的 `/assets/...`（`save_bytes` 返回的正是这个形状），
+   浏览器把字节 POST 给服务端落盘、图里改引用 `resolveAssetUrl()` 拼出的 `/mva-api/assets/...`（网关内部形状是 `save_bytes` 返回的 `/assets/...`，前端需补 `/mva-api` 前缀，见 `src/engine/modelGateway.ts:66`），
    **§5-15 的两条缺口一并消失**；`apps/api/mva/storage.py:21` 已是 sha256 内容寻址，天然去重。
 8. **上传授权留痕**：需求 phase-1 A7（`docs/phase-1-requirements.md:24`）要求上传即勾选版权/肖像授权并落
-   `consent_record`（同文件 :191 给了字段表），目前缺失
+   `consent_record`（同文件 :191 给了字段清单），目前缺失
 
 > 附注（信息记录，无需改代码）：产物 id 格式变了 —— 拖入路径与上传路径现在都铸
 > `art_up_${nodeId}_${size}_${lastModified}_${sanitizedName}`（`src/canvas/fileToArtifact.ts:38`），

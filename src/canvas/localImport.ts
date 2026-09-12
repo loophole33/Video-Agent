@@ -14,17 +14,31 @@ import { nodeRegistry } from '../registry';
 import { useGraph } from '../store/graphStore';
 import { useRun } from '../store/runStore';
 import { useUi } from '../store/uiStore';
-import type { MvaNode } from '../types/graph';
+import type { ArtifactRef, MvaNode } from '../types/graph';
 import { artifactFromFile, kindFromMime } from './fileToArtifact';
+import type { MediaKind } from './fileToArtifact';
+
+/** 上传/拖入共用：runMeta 与既有拖入行为逐字一致是硬约束，故只此一处 */
+const LOCAL_UPLOAD_RUN_META = {
+  attempt: 1,
+  latencyMs: 0,
+  costCny: 0,
+  adapter: 'local-upload',
+  model: '—',
+} as const;
+
+function writeLocalArtifact(nodeId: string, kind: MediaKind, artifact: ArtifactRef): void {
+  useRun.getState().patchRuntime(nodeId, {
+    status: 'success',
+    outputs: { out: { type: kind, items: [artifact] } },
+    runMeta: { ...LOCAL_UPLOAD_RUN_META },
+  });
+}
 
 /** 写入已有节点的产物（runMeta 与既有拖入行为逐字一致） */
 export function attachLocalFile(nodeId: string, file: File): void {
   const { kind, artifact } = artifactFromFile(file, nodeId);
-  useRun.getState().patchRuntime(nodeId, {
-    status: 'success',
-    outputs: { out: { type: kind, items: [artifact] } },
-    runMeta: { attempt: 1, latencyMs: 0, costCny: 0, adapter: 'local-upload', model: '—' },
-  });
+  writeLocalArtifact(nodeId, kind, artifact);
   useUi.getState().toast('success', `已上传 ${file.name.slice(0, 20)}（本地素材）`);
 }
 
@@ -33,7 +47,7 @@ export function importLocalFiles(files: File[], origin: { x: number; y: number }
   if (!files.length) return;
   const apply = useGraph.getState().applyLocal;
   files.forEach((file, i) => {
-    const spec = nodeRegistry.get(kindFromMime(file.type || 'application/octet-stream'));
+    const spec = nodeRegistry.get(kindFromMime(file.type));
     const id = `n_${Math.random().toString(36).slice(2, 9)}`;
     const node: MvaNode = {
       id,
@@ -52,11 +66,7 @@ export function importLocalFiles(files: File[], origin: { x: number; y: number }
     };
     // 产物 id 需要真实节点 id，故这里只调这一次（不再先用 'tmp' 探一次 kind）
     const { kind, artifact } = artifactFromFile(file, id);
-    useRun.getState().patchRuntime(id, {
-      status: 'success',
-      outputs: { out: { type: kind, items: [artifact] } },
-      runMeta: { attempt: 1, latencyMs: 0, costCny: 0, adapter: 'local-upload', model: '—' },
-    });
+    writeLocalArtifact(id, kind, artifact);
     apply(
       [
         { op: 'add_node', node },

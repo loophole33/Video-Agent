@@ -6,6 +6,7 @@ import { EmptyFrame, ImagePreview, itemsOf, JsonPreview, TextPreview, VideoPrevi
 import { Segmented, Slider } from '../../nodes/controls';
 import { cn } from '../../lib/utils';
 import { useModelStore } from '../../engine/realVideo';
+import { useUi } from '../../store/uiStore';
 
 const TIERS = [
   { value: 'T-A', label: 'T-A', title: '高质 i2v（最贵，用在 hook/CTA）' },
@@ -127,7 +128,17 @@ export const imageSpec: NodeTypeSpec = {
       // ⚠️ 必须 attachLocalFile（写【本】节点），绝不能 importLocalFiles（会新建节点）
       // 单选：patchRuntime 是浅合并、会整体替换 outputs，多选只会留下最后一个文件
       const file = e.target.files?.[0];
-      if (file) attachLocalFile(id, file);
+      if (file) {
+        if (file.size > 20 * 1024 * 1024) {
+          useUi
+            .getState()
+            .toast('warn', `文件过大（${(file.size / 1024 / 1024).toFixed(1)}MB，上限 20MB），已取消上传`);
+          e.target.value = '';
+          return;
+        }
+        attachLocalFile(id, file);
+        setUi({ previewIndex: 0 });
+      }
       e.target.value = ''; // 允许再次选择同一个文件
     };
     return (
