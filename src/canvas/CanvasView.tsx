@@ -18,7 +18,6 @@ import '@xyflow/react/dist/style.css';
 import type { MvaEdge, MvaNode, PortType } from '../types/graph';
 import { nodeRegistry } from '../registry';
 import { useGraph } from '../store/graphStore';
-import { useRun } from '../store/runStore';
 import { useUi } from '../store/uiStore';
 import { useAgent } from '../store/agentStore';
 import { useCanvas } from '../store/canvasStore';
@@ -27,6 +26,7 @@ import { TypedEdge } from '../edges/TypedEdge';
 import { validateConnection } from '../canvas/validation';
 import { replaceOnPort } from '../canvas/validation';
 import { QuickCreate } from './QuickCreate';
+import { importLocalFiles } from './localImport';
 import { PORT_COLOR } from '../canvas/validation';
 import { cn } from '../lib/utils';
 
@@ -201,61 +201,7 @@ function CanvasInner() {
 
       const files = Array.from(event.dataTransfer.files ?? []);
       if (!files.length) return;
-      const base = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      files.forEach((file, i) => {
-        const type: 'image' | 'video' | 'audio' = file.type.startsWith('video')
-          ? 'video'
-          : file.type.startsWith('audio')
-            ? 'audio'
-            : 'image';
-        const spec = nodeRegistry.get(type);
-        const url = URL.createObjectURL(file);
-        const id = `n_${Math.random().toString(36).slice(2, 9)}`;
-        const node: MvaNode = {
-          id,
-          type,
-          position: { x: base.x + i * 40, y: base.y + i * 40 },
-          data: {
-            type,
-            label: file.name.slice(0, 18),
-            params: { ...spec.defaultParams },
-            status: 'idle',
-            locked: false,
-            enabled: true,
-            createdBy: 'user',
-            ui: {},
-          },
-        };
-        const kind = type === 'video' ? 'video' : type === 'audio' ? 'audio' : 'image';
-        useRun.getState().patchRuntime(id, {
-          status: 'success',
-          outputs: {
-            out: {
-              type: kind,
-              items: [
-                {
-                  id: `art_up_${id}`,
-                  kind,
-                  url,
-                  thumbUrl: url,
-                  mime: file.type || 'application/octet-stream',
-                  digest: `local-${file.size}`,
-                  meta: { uploaded: true, size: file.size, portrait: false },
-                },
-              ],
-            },
-          },
-          runMeta: { attempt: 1, latencyMs: 0, costCny: 0, adapter: 'local-upload', model: '—' },
-        });
-        apply(
-          [
-            { op: 'add_node', node },
-            { op: 'group', group_id: 'g_media', node_ids: [id], label: '我的素材' },
-          ],
-          '导入素材',
-        );
-        useUi.getState().toast('success', `已导入素材 ${file.name.slice(0, 20)}（L1 审核通过）`);
-      });
+      importLocalFiles(files, screenToFlowPosition({ x: event.clientX, y: event.clientY }));
     },
     [apply, screenToFlowPosition],
   );
