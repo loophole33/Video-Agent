@@ -1,7 +1,8 @@
 # MVA 项目续接文档（HANDOFF）
 
 > 用途：**新会话开场读这一份就能接着干**，不需要上一轮对话的上下文。
-> 最后更新：实时视频链路（i2v）+ 配音（TTS）+ 多画布 + 可伸缩面板 全部落地并验证之后。
+> 最后更新：图像节点本地上传（节点内按钮 + 画布拖入共用单一实现）落地之后。
+> （此前已达：实时视频链路 i2v + 配音 TTS + 多画布 + 可伸缩面板 全部落地并验证。）
 
 ---
 
@@ -55,7 +56,7 @@ MVA 网关 v0.3.0 装配完成：image=openai llm=openai video=dashscope
 | 项 | 结果 |
 |---|---|
 | 网关行为验证 `npm run verify:gateway` | **55/55 通过**（选型/限流重试/降级链/审核阻断不重试/成本账本/Skill 结构修复/异步视频/TTS 非法音色回退） |
-| 前端单测 `npm test` | **25/25**（applyPatch/invertOps/拓扑/连线校验/Agent 规划/成本模型/注册表） |
+| 前端单测 `npm test` | **48/48**（applyPatch/invertOps/拓扑/连线校验/Agent 规划/成本模型/注册表 共 25 + fileToArtifact 15 + localImport 8） |
 | 全真实链路 | 342s / ¥7.30；6 张真图 + 3 段真 i2v（5.0s/1072×1920）+ 6 段逐镜配音 + 成片 17.5s / 1080×1920 / 12.96MB |
 | 成片规格 | h264 High + AAC-LC 48kHz 立体声，**-14.6 LUFS / -1.4 dBTP**（合平台规格） |
 | 人声入片证据 | 高通 1kHz 电平：混音版 -24.6dB vs 仅 BGM 版 -39.8dB（差 15dB） |
@@ -93,7 +94,7 @@ D:\vtest
 ├── src/
 │   ├── store/{graph,run,ui,agent,canvas}Store.ts   图 / 运行态 / UI 布局 / Agent 提案 / 多画布
 │   ├── registry/                 节点注册表（新增节点类型只改这里 + specs）
-│   ├── canvas/{CanvasView,QuickCreate,applyPatch,validation,topo}
+│   ├── canvas/{CanvasView,QuickCreate,fileToArtifact,localImport,applyPatch,validation,topo}
 │   ├── engine/
 │   │   ├── mockEngine.ts         本地执行引擎 + 事件总线（seq / 断线重放）—— 也是各节点的分派处
 │   │   ├── realImages.ts         图像节点 → 网关
@@ -126,6 +127,15 @@ D:\vtest
 12. **非法音色**（qingxin 不在厂商许可列表）→ 逐级回退到默认音色
 13. **wan i2v 只接受 5/10s**，模板写的 4s 会被拒 → 适配器夹到合法档位并按夹后计费
 14. **provider 值写错会静默失效** → 现在启动打印告警 + /healthz.warnings
+15. **图像节点无法本地上传**（只能把文件拖到画布空白处，节点内无入口）→ 图像节点 Body 加「本地上传」按钮；
+    并把「File → ArtifactRef」抽成 `src/canvas/fileToArtifact.ts` 单一实现（配套 15 例单测），
+    画布拖入（`CanvasView.onDrop` → `importLocalFiles`）与节点上传（`attachLocalFile`）共用，消除重复实现。
+    **诚实边界（别当成已打通管线）**：
+    - 上传图会成为节点产物并**立即渲染**（`Preview.tsx` 直接吃 `artifact.url`），下游节点经运行链路也能消费它；
+    - 但 url 是 `blob:`，**刷新即失效**（`canvasStore` 把 graph+runtime 一起存进 localStorage，blob URL 却只活在当前会话）；
+    - 且**不能当 i2v 首帧**：`src/engine/realVideo.ts:54` 的 `backendPath()` 只剥 `/mva-api` 前缀，
+      厂商侧 `to_vendor_ref()`（`apps/api/mva/adapters/video/dashscope_video.py:49`）只认 `data:` / `http` / `/assets/`，
+      `blob:` 会原样透传给厂商 → 不可解析。
 
 ---
 
@@ -137,6 +147,16 @@ D:\vtest
 4. **多版本 A/B**：一次运行出 3 版 hook 供挑选，接 `eval_result` 做胜率统计
 5. **把 mockEngine 换成真后端**：`POST /runs` + WebSocket（store 归约与事件契约都不用改），后端断点续跑 / 幂等键 / 队列落地
 6. **价格表校准**：按真实账单改 `MVA_PRICE_VIDEO_SEC` 等（现在按 ¥0.45/s 记账，3 段就 ¥6.75，接近 ¥8 预算）
+7. **后端上传接口**（`POST /api/v1/assets`，复用 `storage.save_bytes()` 内容寻址）：
+   现状上传图是 `blob:` URL，刷新即失效、且无法当 i2v 首帧（`to_vendor_ref` 只认 `data:`/`http`/`/assets/`）。
+   浏览器把字节 POST 给服务端落盘、图里改引用稳定的 `/assets/...`（`save_bytes` 返回的正是这个形状），
+   **§5-15 的两条缺口一并消失**；`apps/api/mva/storage.py:21` 已是 sha256 内容寻址，天然去重。
+8. **上传授权留痕**：需求 phase-1 A7（`docs/phase-1-requirements.md:24`）要求上传即勾选版权/肖像授权并落
+   `consent_record`（同文件 :191 给了字段表），目前缺失
+
+> 附注（信息记录，无需改代码）：产物 id 格式变了 —— 拖入路径与上传路径现在都铸
+> `art_up_${nodeId}_${size}_${lastModified}_${sanitizedName}`（`src/canvas/fileToArtifact.ts:38`），
+> 此前拖入路径只发 `art_up_${nodeId}`。无代码解析这些 id（仅测试断言其前缀），故不影响任何调用方。
 
 ---
 
