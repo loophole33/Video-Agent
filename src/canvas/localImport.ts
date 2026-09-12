@@ -15,7 +15,7 @@ import { useGraph } from '../store/graphStore';
 import { useRun } from '../store/runStore';
 import { useUi } from '../store/uiStore';
 import type { MvaNode } from '../types/graph';
-import { artifactFromFile } from './fileToArtifact';
+import { artifactFromFile, kindFromMime } from './fileToArtifact';
 
 /** 写入已有节点的产物（runMeta 与既有拖入行为逐字一致） */
 export function attachLocalFile(nodeId: string, file: File): void {
@@ -33,15 +33,14 @@ export function importLocalFiles(files: File[], origin: { x: number; y: number }
   if (!files.length) return;
   const apply = useGraph.getState().applyLocal;
   files.forEach((file, i) => {
-    const kind = artifactFromFile(file, 'tmp').kind;
-    const spec = nodeRegistry.get(kind);
+    const spec = nodeRegistry.get(kindFromMime(file.type || 'application/octet-stream'));
     const id = `n_${Math.random().toString(36).slice(2, 9)}`;
     const node: MvaNode = {
       id,
-      type: kind,
+      type: spec.id,
       position: { x: origin.x + i * 40, y: origin.y + i * 40 },
       data: {
-        type: kind,
+        type: spec.id,
         label: file.name.slice(0, 18),
         params: { ...spec.defaultParams },
         status: 'idle',
@@ -51,11 +50,11 @@ export function importLocalFiles(files: File[], origin: { x: number; y: number }
         ui: {},
       },
     };
-    // 产物 id 需要真实节点 id，故这里用建好的 id 重算一次
-    const { kind: k2, artifact } = artifactFromFile(file, id);
+    // 产物 id 需要真实节点 id，故这里只调这一次（不再先用 'tmp' 探一次 kind）
+    const { kind, artifact } = artifactFromFile(file, id);
     useRun.getState().patchRuntime(id, {
       status: 'success',
-      outputs: { out: { type: k2, items: [artifact] } },
+      outputs: { out: { type: kind, items: [artifact] } },
       runMeta: { attempt: 1, latencyMs: 0, costCny: 0, adapter: 'local-upload', model: '—' },
     });
     apply(

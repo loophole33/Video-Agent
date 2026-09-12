@@ -1,0 +1,109 @@
+/**
+ * localImport 的 store 层确定性测试。
+ * 覆盖本任务最核心的不变量：节点内上传【不得】新建节点。
+ * 不需要 jsdom —— zustand 直接 getState()，node 环境可构造真实 File。
+ */
+import { beforeEach, describe, expect, it } from 'vitest';
+import { attachLocalFile, importLocalFiles } from '../src/canvas/localImport';
+import { useGraph } from '../src/store/graphStore';
+import { useRun } from '../src/store/runStore';
+
+function realFile(name = 'a.png', bytes = 32, type = 'image/png'): File {
+  return new File([new Uint8Array(bytes)], name, { type });
+}
+
+/** 图里塞一个最小可用的 image 节点，模拟「用户点击的那个节点」 */
+function seedImageNode(id = 'n_x'): void {
+  useGraph.setState((s) => {
+    s.graph.nodes.push({
+      id,
+      type: 'image',
+      position: { x: 0, y: 0 },
+      data: {
+        type: 'image',
+        label: id,
+        params: {},
+        status: 'idle',
+        locked: false,
+        enabled: true,
+        createdBy: 'user',
+        ui: {},
+      },
+    } as never);
+  });
+}
+
+beforeEach(() => {
+  useGraph.setState((s) => {
+    s.graph.nodes = [];
+    s.graph.edges = [];
+    s.graph.groups = [];
+  });
+  useRun.setState({ runtime: {} });
+});
+
+describe('attachLocalFile —— 写入既有节点，绝不新建节点', () => {
+  it('节点数不变（本任务最容易写错的一点）', () => {
+    seedImageNode('n_x');
+    const before = useGraph.getState().graph.nodes.length;
+    attachLocalFile('n_x', realFile());
+    expect(useGraph.getState().graph.nodes.length).toBe(before);
+  });
+
+  it('产物 id key 的是被点击的节点', () => {
+    seedImageNode('n_x');
+    attachLocalFile('n_x', realFile());
+    const out = useRun.getState().runtime['n_x']?.outputs?.out;
+    expect(out && 'items' in out).toBe(true);
+    expect(out && 'items' in out ? out.items[0].id : '').toMatch(/^art_up_n_x_/);
+  });
+
+  it('runMeta 与拖入路径逐字一致（防未来漂移）', () => {
+    seedImageNode('n_x');
+    attachLocalFile('n_x', realFile());
+    expect(useRun.getState().runtime['n_x']?.runMeta).toEqual({
+      attempt: 1,
+      latencyMs: 0,
+      costCny: 0,
+      adapter: 'local-upload',
+      model: '—',
+    });
+  });
+
+  it('状态置 success，且 meta.uploaded=true', () => {
+    seedImageNode('n_x');
+    attachLocalFile('n_x', realFile());
+    const rt = useRun.getState().runtime['n_x'];
+    expect(rt?.status).toBe('success');
+    const out = rt?.outputs?.out;
+    expect(out && 'items' in out ? out.items[0].meta?.uploaded : undefined).toBe(true);
+  });
+});
+
+describe('importLocalFiles —— 新建节点并归组', () => {
+  it('恰好新增 1 个节点，且节点 id 与产物 id 中嵌入的一致', () => {
+    importLocalFiles([realFile('drop.png')], { x: 10, y: 20 });
+    const nodes = useGraph.getState().graph.nodes;
+    expect(nodes.length).toBe(1);
+    const node = nodes[0];
+    const out = useRun.getState().runtime[node.id]?.outputs?.out;
+    const artId = out && 'items' in out ? out.items[0].id : '';
+    expect(artId).toContain(node.id);
+  });
+
+  it('归入 g_media 组', () => {
+    importLocalFiles([realFile('drop.png')], { x: 10, y: 20 });
+    const groups = useGraph.getState().graph.groups;
+    expect(groups.some((g) => g.id === 'g_media')).toBe(true);
+  });
+
+  it('多个文件各自建节点', () => {
+    importLocalFiles([realFile('a.png'), realFile('b.png'), realFile('c.png')], { x: 0, y: 0 });
+    expect(useGraph.getState().graph.nodes.length).toBe(3);
+  });
+
+  it('空数组不产生副作用', () => {
+    importLocalFiles([], { x: 0, y: 0 });
+    expect(useGraph.getState().graph.nodes.length).toBe(0);
+  });
+});

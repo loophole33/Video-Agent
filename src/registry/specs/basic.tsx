@@ -124,9 +124,10 @@ export const imageSpec: NodeTypeSpec = {
     const isPlaceholder = items.some((i) => i.meta?.placeholder === true);
     const isUploaded = items.some((i) => i.meta?.uploaded === true);
     const pick = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(e.target.files ?? []);
       // ⚠️ 必须 attachLocalFile（写【本】节点），绝不能 importLocalFiles（会新建节点）
-      files.forEach((f) => attachLocalFile(id, f));
+      // 单选：patchRuntime 是浅合并、会整体替换 outputs，多选只会留下最后一个文件
+      const file = e.target.files?.[0];
+      if (file) attachLocalFile(id, file);
       e.target.value = ''; // 允许再次选择同一个文件
     };
     return (
@@ -163,7 +164,6 @@ export const imageSpec: NodeTypeSpec = {
           ref={fileRef}
           type="file"
           accept="image/png,image/jpeg,image/webp"
-          multiple
           className="hidden"
           onChange={pick}
         />
