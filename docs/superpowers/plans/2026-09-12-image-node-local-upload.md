@@ -16,6 +16,7 @@
 - 产物 id 前缀沿用既有约定 `art_up_`（见 `src/canvas/CanvasView.tsx:237`）。
 - `meta.uploaded === true`、`runMeta.adapter === 'local-upload'`、`runMeta.model === '—'` 必须与既有拖入行为逐字一致。
 - 不引入新依赖（lucide-react / zustand / immer 均已装）。
+- **`tsc --noEmit` 不会报告未使用的 import** —— 本仓库 `tsconfig.json` 未开启 `noUnusedLocals`（`strict` 不含它）。删除代码后清理 import 必须**手工 grep 数引用**，不要把 tsc 退出码 0 当作"import 干净"的证据。（Task 1、Task 3 各出现一次此误判，故写入全局约束。）
 - `artifactFromFile` 必须能在 node 环境（无 jsdom）下测试 → 只读 `file.name` / `file.size` / `file.type` 三个字段，`URL.createObjectURL` 走可注入参数。
 
 ---
@@ -606,12 +607,18 @@ import { importLocalFiles } from './localImport';
 
 - [ ] **Step 3: 清理不再使用的 import**
 
-**已实测确认**：替换后 `nodeRegistry`（仍用于第 140/149/179/181/356/395 行）与 `useRun`（`onDrop` 之外可能仍有引用）**很可能都还需要**，不要无脑删。
+**⚠️ 本仓库 `tsconfig.json` 未开启 `noUnusedLocals`**（`strict` 不包含它）—— 因此 `tsc --noEmit` **不会**报告未使用的 import。必须**手工核查**，不要等 tsc 报错：
+
+```bash
+# 对每个可疑符号，实际数一下它在文件里还有没有别的引用
+grep -n "nodeRegistry" src/canvas/CanvasView.tsx
+grep -n "useRun"      src/canvas/CanvasView.tsx
+```
+
+**已实测确认**：替换后 `nodeRegistry` 仍在 `CanvasView.tsx` 的 140/149/179/181/356/395 行使用，**必须保留**；`useRun` 在删除文件分支后引用数归零，**应删除**。
 
 Run: `cmd /c "npx tsc --noEmit"`
-Expected: 退出码 0。若报 `'X' is declared but its value is never read`，**仅**移除报错的符号；无报错则不动 import。
-
-若 `useRun` 确实只剩 `onDrop` 一处引用而报未使用，则从第 21 行删除 `import { useRun } from '../store/runStore';`。
+Expected: 退出码 0。**注意：退出码 0 不代表 import 干净** —— 它只证明类型正确。
 
 - [ ] **Step 4: 确认去重生效**
 
