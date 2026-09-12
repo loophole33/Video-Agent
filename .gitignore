@@ -1,0 +1,30 @@
+# 密钥：绝不入库（.env.example 是模板，可入库）
+.env
+.env.local
+.env.*.local
+apps/api/.env
+
+# 构建产物
+dist/
+node_modules/
+*.tsbuildinfo
+
+# FFmpeg 渲染产物与临时文件（真实出片的结果目录）
+.mva-renders/
+.mva-renders-version.log
+
+# 模型网关产出的素材与账本（内容寻址）
+.mva-assets/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 交付样例成片（可保留，也可清掉）
+out/
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store

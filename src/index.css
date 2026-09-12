@@ -1,0 +1,168 @@
+﻿@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+  body {
+    @apply bg-bay-950 text-bone-200 font-sans antialiased;
+  }
+  ::selection {
+    background: rgba(232, 163, 61, 0.32);
+  }
+  /* 焦点必须可见（键盘可达） */
+  :focus-visible {
+    outline: 2px solid #e8a33d;
+    outline-offset: 2px;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #14110f;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #3a342f;
+    border-radius: 8px;
+    border: 2px solid #14110f;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #4a423b;
+  }
+}
+
+@layer components {
+  /* 时间码：全案唯一的“数据文字”样式 */
+  .tc {
+    @apply font-mono text-2xs tabular-nums tracking-wider text-bone-400;
+  }
+  .tc-amber {
+    @apply font-mono text-2xs tabular-nums tracking-wider text-sodium-500;
+  }
+  .eyebrow {
+    @apply font-display text-2xs uppercase tracking-[0.16em] text-bone-400;
+  }
+  .btn {
+    @apply inline-flex items-center gap-1.5 rounded-md border border-bay-600 bg-bay-800 px-2.5 py-1.5
+           text-xs text-bone-200 transition-colors hover:border-bay-500 hover:bg-bay-700
+           disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-primary {
+    @apply border-sodium-600 bg-sodium-500 text-bay-950 hover:border-sodium-500 hover:bg-sodium-400
+           font-medium;
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent hover:border-bay-600 hover:bg-bay-800;
+  }
+  .panel {
+    @apply border-bay-800 bg-bay-900;
+  }
+  .field {
+    @apply w-full rounded-md border border-bay-700 bg-bay-950 px-2 py-1.5 font-mono text-xs
+           text-bone-100 outline-none transition-colors placeholder:text-bone-400/50
+           focus:border-sodium-600;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded border border-bay-600 bg-bay-800 px-1.5 py-0.5
+           font-mono text-2xs text-bone-300;
+  }
+}
+
+/* ── React Flow 覆写：让画布读起来像一台机器的操作面，而不是通用流程图 ── */
+.react-flow {
+  --xy-background-color: #14110f;
+}
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__handle {
+  width: 13px;
+  height: 13px;
+  border: 2px solid #14110f;
+  border-radius: 3px; /* 方孔 = 齿孔语言 */
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease;
+}
+.react-flow__handle:hover {
+  transform: scale(1.35);
+}
+.react-flow__handle-left {
+  left: -6px;
+}
+.react-flow__handle-right {
+  right: -6px;
+}
+.react-flow__handle.connectingto {
+  box-shadow: 0 0 0 4px rgba(63, 191, 143, 0.28);
+}
+.react-flow__handle.connectingfrom {
+  box-shadow: 0 0 0 4px rgba(232, 163, 61, 0.25);
+}
+.react-flow__edge-path {
+  stroke-width: 1.75;
+}
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #f2be6b !important;
+  stroke-width: 2.5;
+}
+.react-flow__edge-textbg {
+  fill: #14110f;
+}
+.react-flow__node {
+  font-family: inherit;
+}
+.react-flow__minimap {
+  background: #0e0c0b !important;
+  border: 1px solid #2c2724;
+  border-radius: 6px;
+}
+.react-flow__controls-button {
+  background: #211d1a;
+  border-bottom: 1px solid #2c2724;
+  color: #cfc7b5;
+  fill: #cfc7b5;
+}
+.react-flow__controls-button:hover {
+  background: #2c2724;
+}
+.react-flow__selection {
+  background: rgba(232, 163, 61, 0.08);
+  border: 1px dashed #c97f1e;
+}
+.react-flow__node.selected .mva-card {
+  border-color: #e8a33d;
+  box-shadow:
+    0 0 0 1px #e8a33d,
+    0 12px 32px -14px rgba(0, 0, 0, 0.95);
+}
+
+/* 胶片格齿孔边：签名元素 */
+.sprocket {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 5px,
+    rgba(20, 17, 15, 0.85) 5px 9px
+  );
+  background-size: 6px 14px;
+  background-repeat: repeat-y;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

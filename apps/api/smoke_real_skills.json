@@ -1,0 +1,227 @@
+{
+  "health": {
+    "providers": {
+      "image": "openai",
+      "llm": "openai",
+      "video": "none"
+    },
+    "available": [
+      "llm:llm-openai-compat/qwen3.8-flash",
+      "image:openai-compat/qwen-image-3.0",
+      "image:local-poster/pillow-poster-v1"
+    ],
+    "warnings": []
+  },
+  "copy": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "skill": {
+        "key": "mva.copy.generate",
+        "version": "1.1.0"
+      },
+      "output": {
+        "variants": [
+          {
+            "style": "痛点型",
+            "hook": "想喝甜的又怕胖？",
+            "body": "这瓶0糖气泡水，冰爽杀口，满足你的碳酸瘾，还没负担。",
+            "cta": "戳下方，开启0糖快乐！",
+            "estimated_read_s": 6.5
+          },
+          {
+            "style": "利益型",
+            "hook": "0糖也能这么爽！",
+            "body": "喝一口透心凉，0糖配方，好喝没负担，解馋必备。",
+            "cta": "点购物车，立即尝鲜。",
+            "estimated_read_s": 6.0
+          },
+          {
+            "style": "场景型",
+            "hook": "火锅局来一罐。",
+            "body": "冰爽气泡水，解辣又解腻，0糖放心喝，快乐加倍。",
+            "cta": "左下角囤货，开吃！",
+            "estimated_read_s": 6.2
+          }
+        ],
+        "recommended_index": 0,
+        "usp_coverage": {
+          "0糖": true,
+          "冰爽": true
+        }
+      },
+      "meta": {
+        "model": "qwen3.8-flash",
+        "adapter": "llm-openai-compat",
+        "tokens": {
+          "in": 395,
+          "out": 1584
+        },
+        "cost_cny": 0.013462,
+        "latency_ms": 28723,
+        "schema_repairs": 0,
+        "prompt_file": "1.1.0.md",
+        "attempts": [
+          {
+            "adapter": "llm-openai-compat",
+            "attempt": 1,
+            "ok": true
+          }
+        ]
+      }
+    }
+  },
+  "storyboard": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "skill": {
+        "key": "mva.script.storyboard",
+        "version": "1.2.0"
+      },
+      "output": {
+        "total_duration_s": 20.0,
+        "narration_full": "想喝甜的又怕胖？这瓶0糖气泡水，冰爽杀口，满足你的碳酸瘾，还没负担。戳下方，开启0糖快乐！",
+        "shots": [
+          {
+            "shot_no": 1,
+            "duration_s": 2.5,
+            "visual": "主角手持奶茶犹豫，突然看向镜头，表情夸张",
+            "camera": "特写",
+            "subject_ref": "main_character",
+            "narration": "想喝甜的又怕胖？",
+            "on_screen_text": "想喝甜的又怕胖？",
+            "transition_out": "cut"
+          },
+          {
+            "shot_no": 2,
+            "duration_s": 3.0,
+            "visual": "主角瘫坐在沙发上，看着手机上的体重秤数字，叹气",
+            "camera": "中景",
+            "subject_ref": "main_character",
+            "narration": "（叹气声）",
+            "on_screen_text": "这瓶0糖气泡水",
+            "transition_out": "cut"
+          },
+          {
+            "shot_no": 3,
+            "duration_s": 3.5,
+            "visual": "产品从冰箱拿出，瓶身挂满水珠，气泡上升",
+            "camera": "缓慢推近",
+            "subject_ref": "hero_product",
+            "narration": "这瓶0糖气泡水",
+            "on_screen_text": "冰爽杀口",
+            "transition_out": "cut"
+          },
+          {
+            "shot_no": 4,
+            "duration_s": 3.5,
+            "visual": "气泡水倒入加冰玻璃杯，气泡剧烈翻腾，水花飞溅",
+            "camera": "特写",
+            "subject_ref": "hero_product",
+            "narration": "冰爽杀口",
+            "on_screen_text": "满足你的碳酸瘾",
+            "transition_out": "cut"
+          },
+          {
+            "shot_no": 5,
+            "duration_s": 3.5,
+            "visual": "主角大口喝下气泡水，表情享受，竖起大拇指",
+            "camera": "中景",
+            "subject_ref": "main_character",
+            "narration": "满足你的碳酸瘾，还没负担。",
+            "on_screen_text": "还没负担",
+            "transition_out": "cut"
+          },
+          {
+            "shot_no": 6,
+            "duration_s": 4.0,
+            "visual": "产品特写，下方出现购物车图标，主角画外音引导",
+            "camera": "缓慢推近",
+            "subject_ref": "hero_product",
+            "narration": "戳下方，开启0糖快乐！",
+            "on_screen_text": "戳下方，开启0糖快乐！",
+            "transition_out": "none"
+          }
+        ],
+        "consistency_bible": {
+          "characters": [
+            {
+              "ref": "main_character",
+              "appearance": "年轻女性，穿着白色T恤，长发披肩，妆容清淡自然"
+            }
+          ],
+          "props": [
+            {
+              "ref": "hero_product",
+              "appearance": "透明塑料瓶装气泡水，瓶身标签为蓝白配色，印有'0糖'字样，瓶盖为蓝色"
+            }
+          ],
+          "environment": [
+            "现代简约风格客厅，浅色沙发，背景有绿植"
+          ],
+          "lighting": "明亮自然光，强调清爽感"
+        }
+      },
+      "meta": {
+        "model": "qwen3.8-flash",
+        "adapter": "llm-openai-compat",
+        "tokens": {
+          "in": 592,
+          "out": 3651
+        },
+        "cost_cny": 0.030392,
+        "latency_ms": 66812,
+        "schema_repairs": 0,
+        "prompt_file": "1.2.0.md",
+        "attempts": [
+          {
+            "adapter": "llm-openai-compat",
+            "attempt": 1,
+            "ok": true
+          }
+        ]
+      }
+    }
+  },
+  "compile": {
+    "status": 200,
+    "body": {
+      "ok": true,
+      "skill": {
+        "key": "mva.prompt.compile.video",
+        "version": "1.0.0"
+      },
+      "output": {
+        "prompt": "年轻女性，穿着白色T恤，长发披肩，妆容清淡自然，手持透明塑料瓶装气泡水（注：根据视觉描述调整，但需保持产品一致性锚点：透明塑料瓶装气泡水，瓶身标签为蓝白配色，印有'0糖'字样，瓶盖为蓝色），表情从犹豫转为夸张看向镜头。特写镜头，轻微推近，明亮自然光，强调清爽感，现代简约风格客厅，浅色沙发，背景有绿植。画面清晰，动作自然流畅，无变形。",
+        "negative_prompt": "低分辨率, 模糊, 抖动, 闪烁, 文字乱码, 水印, 变形, 多余肢体, 面部扭曲, 黑暗, 噪点",
+        "params_hint": {
+          "ratio": "9:16",
+          "resolution": "1080x1920",
+          "duration_s": 2.5,
+          "motion": "缓慢推近"
+        },
+        "consistency_anchor_used": "年轻女性，穿着白色T恤，长发披肩，妆容清淡自然; 透明塑料瓶装气泡水，瓶身标签为蓝白配色，印有'0糖'字样，瓶盖为蓝色; 现代简约风格客厅，浅色沙发，背景有绿植; 明亮自然光，强调清爽感"
+      },
+      "meta": {
+        "model": "qwen3.8-flash",
+        "adapter": "llm-openai-compat",
+        "tokens": {
+          "in": 521,
+          "out": 2569
+        },
+        "cost_cny": 0.021594,
+        "latency_ms": 46891,
+        "schema_repairs": 0,
+        "prompt_file": "1.0.0.md",
+        "attempts": [
+          {
+            "adapter": "llm-openai-compat",
+            "attempt": 1,
+            "ok": true
+          }
+        ]
+      }
+    }
+  }
+}
