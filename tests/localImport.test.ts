@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { attachLocalFile, importLocalFiles } from '../src/canvas/localImport';
 import { useGraph } from '../src/store/graphStore';
 import { useRun } from '../src/store/runStore';
+import type { ArtifactRef } from '../src/types/graph';
 
 function realFile(name = 'a.png', bytes = 32, type = 'image/png'): File {
   return new File([new Uint8Array(bytes)], name, { type });
@@ -91,11 +92,23 @@ describe('attachLocalFile —— 写入既有节点，绝不新建节点', () =>
     const viaDrop = Object.entries(rt).find(([id]) => id !== 'n_x')?.[1];
 
     expect(viaDrop).toBeDefined();
+
+    const a = viaButton.outputs!.out as { items: ArtifactRef[] };
+    const b = viaDrop!.outputs!.out as { items: ArtifactRef[] };
+    // 必须逐个断言长度，否则两条路径都产出 items: [] 时下面会恒真
+    expect(a.items).toHaveLength(1);
+    expect(b.items).toHaveLength(1);
+
+    // runMeta 是共享契约（LOCAL_UPLOAD_RUN_META），必须逐字一致
     expect(viaDrop!.runMeta).toEqual(viaButton.runMeta);
-    // 产物除 id（内含各自节点 id）外应逐字段一致
-    const a = viaButton.outputs!.out as { items: { id: string }[] };
-    const b = viaDrop!.outputs!.out as { items: { id: string }[] };
-    expect({ ...b.items[0], id: '' }).toEqual({ ...a.items[0], id: '' });
+
+    // url/thumbUrl 是会话内一次性 blob 句柄，不是产物语义 —— 故意排除在跨路径比较之外
+    const { url: ua, thumbUrl: ta, ...sa } = a.items[0];
+    const { url: ub, thumbUrl: tb, ...sb } = b.items[0];
+    expect({ ...sb, id: '' }).toEqual({ ...sa, id: '' });
+    // 但每条路径内部必须 url === thumbUrl
+    expect(ta).toBe(ua);
+    expect(tb).toBe(ub);
   });
 });
 
