@@ -47,8 +47,13 @@ NEWGEN_MIN, NEWGEN_MAX = 2, 15
 
 
 def is_newgen(model: str) -> bool:
-    """wan2.7 及以后：media 传参 + 2–15s 连续档位。"""
-    return bool(re.match(r"^wan2\.(7|8|9)", model or ""))
+    """wan2.7 及以后：media 传参 + 2–15s 连续档位。
+
+    用整数比较而非 `(7|8|9)` 字符类 —— 否则未来的 `wan2.10` 会被判为旧模型，
+    静默退回 `img_url` 形状（异步接口只在终态报错），等于重演本次这个 bug。
+    """
+    m = re.match(r"^wan2\.(\d+)", model or "")
+    return bool(m) and int(m.group(1)) >= 7
 
 
 def allowed_durations(model: str) -> tuple[int, ...]:
