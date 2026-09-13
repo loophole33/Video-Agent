@@ -277,4 +277,4 @@ tests/                               # 114 项前端单测（pure / fileToArtifa
 
 ## 许可证
 
-[MIT](LICENSE) © 2026 
+[MIT](LICENSE) © 2026 loophole33
