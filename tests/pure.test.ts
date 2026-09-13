@@ -226,14 +226,17 @@ describe('mockAgent', () => {
   });
 
   it('省钱模式全用 T-C 档', () => {
-    const res = planWorkflow(graph([]), '做条 20s 视频，便宜点');
+    // Task 2 修正夹具：原文案「做条 20s 视频，便宜点」**没有任何内容/产品**，
+    // 属于 needsClarify 路径（已由澄清短路拦下，零节点）。这条测试想验证的是
+    // 「便宜模式下档位配比」，必须用一条真实需求驱动它 —— 否则它验证的是占位工作流。
+    const res = planWorkflow(graph([]), '给这款气泡水做条 20s 视频，便宜点');
     const next = applyPatch(graph([]), res.patch!.ops);
     const tiers = next.nodes.filter((n) => n.data.type === 'image').map((n) => n.data.params.tier);
     expect(new Set(tiers)).toEqual(new Set(['T-C']));
   });
 
   it('增量编辑只改必要节点，不重建整图', () => {
-    const g = applyPatch(graph([]), planWorkflow(graph([]), '做条 20s 抖音种草视频，突出 0 糖').patch!.ops);
+    const g = applyPatch(graph([]), planWorkflow(graph([]), '给这款气泡水做条 20s 抖音种草视频，突出 0 糖').patch!.ops);
     const before = g.nodes.length;
     const res = editWorkflow(g, '太贵了，便宜点');
     expect(res.patch).toBeDefined();
@@ -243,17 +246,25 @@ describe('mockAgent', () => {
   });
 
   it('无法识别的指令不产生补丁，而是提出澄清问题', () => {
-    const g = applyPatch(graph([]), planWorkflow(graph([]), '做条 20s 视频').patch!.ops);
+    const g = applyPatch(graph([]), planWorkflow(graph([]), '给这款气泡水做条 20s 视频').patch!.ops);
     const res = editWorkflow(g, '随便弄一下');
     expect(res.patch).toBeUndefined();
     expect(res.questions?.length).toBeGreaterThan(0);
+  });
+  it('无内容的指令不再产出占位工作流：走澄清、零节点', () => {
+    // Task 2：这条断言把「夹具修正」钉成契约。修复前「做条 20s 视频」会生成 5 张图，
+    // 提示词是空槽位 + 哨兵词的 `痛点开场：，清爽，高性价比，竖屏特写`。
+    // 现在它必须是零 ops 的澄清回复 —— 若有人回退澄清短路，本测试立刻变红。
+    const res = planWorkflow(graph([]), '做条 20s 视频');
+    expect(res.patch!.ops).toEqual([]);
+    expect(res.reply).toContain('补充主体或产品');
   });
 });
 
 /* ── 成本模型 ── */
 describe('cost', () => {
   it('默认配比（1×T-A + 2×T-B + 静图动效）落在 ¥8 预算内', () => {
-    const g = applyPatch(graph([]), planWorkflow(graph([]), '做条 20s 抖音种草视频，突出 0 糖').patch!.ops);
+    const g = applyPatch(graph([]), planWorkflow(graph([]), '给这款气泡水做条 20s 抖音种草视频，突出 0 糖').patch!.ops);
     const cost = graphCost(g);
     expect(cost).toBeGreaterThan(0);
     expect(cost).toBeLessThanOrEqual(8);
@@ -284,8 +295,8 @@ describe('cost', () => {
   });
 
   it('省钱模式下成本显著低于默认配比', () => {
-    const def = graphCost(applyPatch(graph([]), planWorkflow(graph([]), '做条 20s 视频，突出 0 糖').patch!.ops));
-    const cheap = graphCost(applyPatch(graph([]), planWorkflow(graph([]), '做条 20s 视频，突出 0 糖，便宜点').patch!.ops));
+    const def = graphCost(applyPatch(graph([]), planWorkflow(graph([]), '给这款气泡水做条 20s 视频，突出 0 糖').patch!.ops));
+    const cheap = graphCost(applyPatch(graph([]), planWorkflow(graph([]), '给这款气泡水做条 20s 视频，突出 0 糖，便宜点').patch!.ops));
     expect(cheap).toBeLessThan(def);
   });
 });

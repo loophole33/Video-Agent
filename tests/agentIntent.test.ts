@@ -3,7 +3,11 @@
  * 回归红线：营销场景行为必须与修复前一致。
  */
 import { describe, expect, it } from 'vitest';
-import { extractProduct, extractSubject, parseBrief } from '../src/engine/mockAgent';
+// 简报原文还 import 了 `respond` 与 `nodeRegistry`，但本文件从未使用（tsc 未开 noUnusedLocals
+// 所以不报错，且仓库无 lint 脚本）—— 空引用已移除，避免误导读者以为它们参与了断言。
+import { extractProduct, extractSubject, parseBrief, planWorkflow } from '../src/engine/mockAgent';
+import type { AgentResult } from '../src/engine/mockAgent';
+import type { MvaNode, PatchOp, WorkflowGraph } from '../src/types/graph';
 
 describe('extractSubject —— 从原话提取画面内容', () => {
   it('「生成一个…的视频」提取主体', () => {
@@ -332,5 +336,161 @@ describe('Task 1 第三轮复审（复合时长 / 把字句帧 / 死分支清理
     // 锚定 ^…$ 对整串生效，故以「把」开头但不止于「做成/拍成」的残余必须放行。
     // 这同时是已知边界：把字句宾语回填不做（新机制、会引入静默丢内容），只做整帧拒绝。
     expect(extractSubject('把猫咪做成花的视频')).toBe('把猫咪做成花');
+  });
+});
+
+/* ── Task 2：subject 必须真正到达生成的节点参数 ── */
+
+function emptyGraph(): WorkflowGraph {
+  return {
+    schemaVersion: '1.0.0',
+    id: 'wf_test',
+    name: 'test',
+    version: 1,
+    viewport: { x: 0, y: 0, zoom: 1 },
+    nodes: [],
+    edges: [],
+    groups: [],
+    constraints: { budgetLimitCny: 8, platform: 'douyin', ratio: '9:16' },
+  };
+}
+
+/** 取出一份补丁的 ops（AgentResult.patch 是可选字段，测试里断言必然存在） */
+function opsOf(res: AgentResult) {
+  return res.patch!.ops;
+}
+
+function addedNodes(res: AgentResult): MvaNode[] {
+  // 修订简报代码：`(o as { node: never }).node` 在 TS 下是非法收窄（unknown → never），
+  // 且参数类型 `{ patch: { ops: ... } }` 与 AgentResult（patch 可选）不兼容 —— tsc 报 14 处。
+  // 改为收窄到 add_node 分支后读 node，类型安全且断言等价。
+  return opsOf(res)
+    .filter((o): o is Extract<PatchOp, { op: 'add_node' }> => o.op === 'add_node')
+    .map((o) => o.node);
+}
+
+describe('planWorkflow —— subject 必须到达图像与视频提示词', () => {
+  it('通用请求：图像提示词含主体，且走 subject 分支（不留空槽位残渣）', () => {
+    const res = planWorkflow(emptyGraph(), '帮我生成一个小男孩在雨中奔跑的视频');
+    const imgs = addedNodes(res).filter((n: MvaNode) => n.data.type === 'image');
+    expect(imgs.length).toBeGreaterThan(0);
+    for (const n of imgs) {
+      const prompt = String((n as { data: { params: { prompt?: string } } }).data.params.prompt ?? '');
+      expect(prompt).toContain('小男孩在雨中奔跑');
+      // 自审加强：仅断言「含主体」是**弱断言** —— Task 1 的 product=subject 兜底已让旧模板
+      // 也能通过（`痛点开场：小男孩在雨中奔跑，清爽，，竖屏特写`）。把 subject 分支的形状钉死，
+      // 这样回退 (c) 的图像提示词改动立刻变红。
+      expect(prompt).toBe('小男孩在雨中奔跑，建立镜头，清爽，竖屏特写');
+    }
+    // script.brief 必须带主体（变异测试实测：回退 (e) 时无任何测试变红，故此处补守护）
+    const script = addedNodes(res).find((n: MvaNode) => n.data.type === 'script');
+    expect(script!.data.params.brief).toBe('小男孩在雨中奔跑 / douyin / 5s / 清爽');
+  });
+
+  it('信封句式：视频/脚本/回复都含尾部内容（才能区分 subject 与 product）', () => {
+    // 自审关键发现：通用句 `帮我生成一个小男孩在雨中奔跑的视频` 下 product === subject
+    // （Task 1 的 product 兜底），因此它**无法区分** (d)(e)(g) 三条编辑与它们的旧版本
+    // —— 实测这三条回退后全套仍全绿。要真正测出 subject 通路，必须用 head≠tail 的信封句：
+    // head='猫咪' → product，tail='在雨中奔跑' → subject。此时旧模板（用 product）会丢掉「在雨中奔跑」。
+    const res = planWorkflow(emptyGraph(), '给猫咪制作一个在雨中奔跑的视频');
+    const nodes = addedNodes(res);
+    expect(JSON.stringify(nodes)).toContain('猫咪');
+    const vid = nodes.find((n: MvaNode) => n.data.type === 'video');
+    expect(vid!.data.params.prompt).toBe('镜头 1：猫咪在雨中奔跑，清爽，流畅运镜');
+    const script = nodes.find((n: MvaNode) => n.data.type === 'script');
+    expect(script!.data.params.brief).toBe('猫咪在雨中奔跑 / douyin / 5s / 清爽');
+    expect(res.reply).toContain('我按「猫咪在雨中奔跑 · douyin · 5s · 清爽」');
+  });
+
+  it('通用请求：提示词与回复都不含空槽位残渣与哨兵词', () => {
+    // 自审补守护：回复文案与 usp 槽位渲染原先**无任何测试覆盖**（变异 E/G 实测全绿）。
+    const res = planWorkflow(emptyGraph(), '帮我生成一个小男孩在雨中奔跑的视频');
+    // 回复让用户一眼看到主体被识别对了（简报 (g)）；回退 (g) 时这条变红
+    expect(res.reply).toContain('我按「小男孩在雨中奔跑 · douyin · 5s · 清爽」');
+    // 空 usp 槽位不得留下连续逗号（回退 uspPart 时这条变红；测试 A 的精确断言是第二道闸）
+    expect(JSON.stringify(addedNodes(res))).not.toContain('，，');
+    expect(res.reply).not.toContain('高性价比');
+  });
+
+  it('通用请求：视频提示词也含主体（修复前连 product 都没有）', () => {
+    const res = planWorkflow(emptyGraph(), '帮我生成一个小男孩在雨中奔跑的视频');
+    const vids = addedNodes(res).filter((n: MvaNode) => n.data.type === 'video');
+    expect(vids.length).toBeGreaterThan(0);
+    for (const n of vids) {
+      const prompt = String((n as { data: { params: { prompt?: string } } }).data.params.prompt ?? '');
+      expect(prompt).toContain('小男孩在雨中奔跑');
+    }
+  });
+
+  it('通用请求：不把哨兵词「产品」「高性价比」当内容写出', () => {
+    const res = planWorkflow(emptyGraph(), '帮我生成一个小男孩在雨中奔跑的视频');
+    const all = JSON.stringify(addedNodes(res));
+    // 自审加强：先钉住**前置条件**。若 subject 根本没进节点，下面的 not.toContain 是空转
+    // （对空对象断言「不含哨兵词」恒真），这条测试就变成了装饰。
+    expect(all).toContain('小男孩在雨中奔跑');
+    expect(all).not.toContain('：产品，');
+    expect(all).not.toContain('高性价比');
+  });
+
+  it('通用无时长 → 1 镜，且拓扑完整（image→video→qa→compose）', () => {
+    const res = planWorkflow(emptyGraph(), '帮我生成一个小男孩在雨中奔跑的视频');
+    const nodes = addedNodes(res);
+    const types = nodes.map((n: MvaNode) => n.data.type);
+    expect(types.filter((t: string) => t === 'image').length).toBe(1);
+    expect(types.filter((t: string) => t === 'video').length).toBe(1);
+    expect(types).toContain('compose');
+    expect(types).toContain('qa_check');
+  });
+
+  it('通用请求的镜头标签不是营销词', () => {
+    const res = planWorkflow(emptyGraph(), '帮我生成一个小男孩在雨中奔跑的视频');
+    const all = JSON.stringify(addedNodes(res));
+    expect(all).not.toContain('痛点开场');
+    expect(all).not.toContain('CTA');
+  });
+
+  it('回归红线：营销请求仍产出 5 镜且提示词含产品名', () => {
+    const res = planWorkflow(emptyGraph(), '给这款气泡水做一个抖音种草视频，20秒，突出清爽解渴');
+    const nodes = addedNodes(res);
+    const types = nodes.map((n: MvaNode) => n.data.type);
+    expect(types.filter((t: string) => t === 'image').length).toBe(5);
+    expect(JSON.stringify(nodes)).toContain('气泡水');
+    // 自审加强：仅断言「含气泡水」不足以守住红线模板 —— 回退 (c) 的营销分支后它依然是绿的。
+    // 把营销提示词模板逐字钉死，任何对营销渲染的改动都会在这里爆炸。
+    expect(nodes.filter((n: MvaNode) => n.data.type === 'image').map((n) => n.data.params.prompt)).toEqual([
+      '痛点开场：气泡水，清爽，清爽解渴，竖屏特写',
+      '产品特写：气泡水，清爽，清爽解渴，竖屏特写',
+      '使用场景：气泡水，清爽，清爽解渴，竖屏特写',
+      '卖点演示：气泡水，清爽，清爽解渴，竖屏特写',
+      '对比效果：气泡水，清爽，清爽解渴，竖屏特写',
+    ]);
+  });
+
+  it('提取不到主体 → 反问澄清且不落任何节点', () => {
+    const res = planWorkflow(emptyGraph(), '来个产品介绍视频');
+    expect(opsOf(res).length).toBe(0);
+    expect(res.reply.length).toBeGreaterThan(0);
+  });
+
+  it('营销澄清路径不得再把哨兵词「高性价比」写进节点参数', () => {
+    // Task 1 第 3 轮审查的 Critical：planWorkflow 从不读 needsClarify，
+    // 于是 marketing + product='' 时会写出 `痛点开场：，清爽，高性价比，竖屏特写`。
+    // 澄清短路落地后必须为「零节点」，因此这里同时断言「不落节点」与「无哨兵词」。
+    // 自审说明：本测试的"致命性"锚在 `ops.length === 0` 这一条上 —— 回退澄清短路后
+    // 该句会产出 32 个 op（实测），第一条断言立刻红；第二条 not.toContain 是补充说明。
+    // 澄清路径下 ops 必为空，故 not.toContain 无法独立变红，但零点断言已经完全覆盖此风险。
+    const res = planWorkflow(emptyGraph(), '给我做一个产品宣传视频');
+    expect(opsOf(res).length).toBe(0);
+    expect(JSON.stringify(opsOf(res))).not.toContain('高性价比');
+  });
+
+  it('voiceId 不再硬编码非法音色 qingxin', () => {
+    const res = planWorkflow(emptyGraph(), '帮我生成一个小男孩在雨中奔跑的视频');
+    expect(JSON.stringify(addedNodes(res))).not.toContain('qingxin');
+    // 自审加强：仅断言「不含 qingxin」挡不住任意改坏（改成 'xyz' 也绿）。
+    // 钉死仓库既有的合法音色（registry 默认值 / templates.ts / realAudio.ts 均为 Cherry）。
+    const audios = addedNodes(res).filter((n: MvaNode) => n.data.type === 'audio');
+    expect(audios.length).toBeGreaterThan(0);
+    for (const a of audios) expect(a.data.params.voiceId).toBe('Cherry');
   });
 });

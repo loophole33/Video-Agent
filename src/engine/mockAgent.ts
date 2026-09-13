@@ -216,6 +216,28 @@ const edge = (
 /** 一句话 → 生成整张工作流（提案用，不直接落图） */
 export function planWorkflow(graph: WorkflowGraph, utterance: string): AgentResult {
   const b = parseBrief(utterance);
+
+  // 澄清短路（Task 2 / Task 1 第三轮审查 Critical）：既没解析出产品、也没解析出主体时，
+  // 绝不能继续往下走 —— 否则会写出一条占位工作流（5 张图 + 视频），提示词里全是空槽位与
+  // 哨兵词：`痛点开场：，清爽，高性价比，竖屏特写`。用户为此付真金白银，却拿到自己没要的内容。
+  // 此时唯一正确的动作是反问。ops 为空数组：不落任何节点。
+  if (b.needsClarify) {
+    return {
+      reply:
+        '这条我还判断不出要拍什么。请补充主体或产品，例如：\n' +
+        '· 通用：「生成一个<主体在做什么>的视频，<时长>秒」\n' +
+        '· 营销：「给这款<产品>做条<时长>秒<平台>种草视频，突出<卖点>」',
+      patch: {
+        patch_id: `p_${Math.random().toString(36).slice(2, 10)}`,
+        base_version: graph.version,
+        rationale: `「${utterance.slice(0, 28)}」缺少可提取的主体，已请求澄清`,
+        author: 'agent',
+        risk: 'low',
+        ops: [],
+      },
+    };
+  }
+
   const base = graph.nodes.filter((n) => n.type !== 'group').length;
 
   // 预算配比（docs/phase-4 §4.4）：便宜模式全 T-C，否则 hook 用 T-A、其余 T-B/T-C
@@ -235,7 +257,9 @@ export function planWorkflow(graph: WorkflowGraph, utterance: string): AgentResu
       targetDurationS: b.durationS,
       shotCount: b.shots,
       style: b.tone,
-      brief: `${b.product} / ${b.platform} / ${b.durationS}s / ${b.tone} / 卖点：${b.usp.join('、')}`,
+      brief: b.subject
+        ? `${b.subject} / ${b.platform} / ${b.durationS}s / ${b.tone}`
+        : `${b.product} / ${b.platform} / ${b.durationS}s / ${b.tone}${b.usp.length ? ` / 卖点：${b.usp.join('、')}` : ''}`,
     },
     '分镜脚本',
   );
@@ -249,8 +273,15 @@ export function planWorkflow(graph: WorkflowGraph, utterance: string): AgentResu
   nodes.push(script, prompt);
   edges.push(edge(script.id, 'out:out', prompt.id, 'in:in', 'json'));
 
-  const shotLabels = ['痛点开场', '产品特写', '使用场景', '卖点演示', '对比效果', 'CTA 收尾'];
+  // 镜头标签二分：通用请求用影视语言，不得把营销话术写进用户没在卖货的片子里
+  const shotLabels = b.isMarketing
+    ? ['痛点开场', '产品特写', '使用场景', '卖点演示', '对比效果', 'CTA 收尾']
+    : ['建立镜头', '中景', '跟拍', '特写', '全景', '收尾'];
   const imageNodes: MvaNode[] = [];
+  // usp 槽位渲染：通用请求 usp 为空，若仍写 `${usp[0] ?? ''}，` 会留下双逗号
+  // （`小男孩在雨中奔跑，清爽，，竖屏特写`）—— 空槽位残渣不得进提示词。
+  // 营销路径 usp 非空，渲染结果与修复前逐字相同（红线）。
+  const uspPart = b.usp[0] ? `${b.usp[0]}，` : '';
   for (let i = 0; i < b.shots; i++) {
     const label = shotLabels[i % shotLabels.length];
     const img = mkNode(
@@ -258,7 +289,9 @@ export function planWorkflow(graph: WorkflowGraph, utterance: string): AgentResu
       X.shot,
       20 + i * 300,
       {
-        prompt: `${label}：${b.product}，${b.tone}，${b.usp[0] ?? ''}，竖屏特写`,
+        prompt: b.subject
+          ? `${b.subject}，${label}，${b.tone}，竖屏特写`
+          : `${label}：${b.product}，${b.tone}，${uspPart}竖屏特写`,
         tier: tiers[i] === 'T-A' ? 'T-A' : tiers[i] === 'T-B' ? 'T-B' : 'T-C',
         count: i === 0 ? 2 : 1,
         seed: stableSeed(`${b.product}:${i}`),
@@ -281,7 +314,9 @@ export function planWorkflow(graph: WorkflowGraph, utterance: string): AgentResu
         tier: tiers[i],
         durationS: Math.max(3, Math.round(b.durationS / b.shots)),
         motionStrength: 0.6,
-        prompt: `镜头 ${i + 1} 动态：${b.tone}，流畅运镜`,
+        prompt: b.subject
+          ? `镜头 ${i + 1}：${b.subject}，${b.tone}，流畅运镜`
+          : `镜头 ${i + 1} 动态：${b.tone}，流畅运镜`,
       },
       `视频 ${i + 1} · ${tiers[i]}`,
     );
@@ -290,7 +325,7 @@ export function planWorkflow(graph: WorkflowGraph, utterance: string): AgentResu
     edges.push(edge(imageNodes[i].id, 'out:out', v.id, 'in:first', 'image'));
   }
 
-  const tts = mkNode('audio', X.prompt, 560, { mode: 'tts', voiceId: 'qingxin', speed: 1, emotion: b.tone }, '配音');
+  const tts = mkNode('audio', X.prompt, 560, { mode: 'tts', voiceId: 'Cherry', speed: 1, emotion: b.tone }, '配音');
   const qa = mkNode('qa_check', X.qa, 200, { blockOnFail: true, adLawCheck: true }, '质检');
   const compose = mkNode('compose', X.mix, 220, { subtitle: true, ratio: '9:16', resolution: '1080x1920' }, '合成导出');
   nodes.push(tts, qa, compose);
@@ -315,7 +350,7 @@ export function planWorkflow(graph: WorkflowGraph, utterance: string): AgentResu
 
   const cost = nodes.reduce((sum, n) => sum + nodeRegistry.get(n.data.type).estimateCost(n.data.params), 0);
   const reply =
-    `我按「${b.platform} · ${b.durationS}s · ${b.tone}」搭了一条流水线：` +
+    `我按「${b.subject || b.product} · ${b.platform} · ${b.durationS}s · ${b.tone}」搭了一条流水线：` +
     `分镜 → 提示词编译 → ${b.shots} 个镜头（${tiers.filter((t) => t === 'T-A').length} 个 T-A / ` +
     `${tiers.filter((t) => t === 'T-B').length} 个 T-B / ${tiers.filter((t) => t === 'T-C').length} 个静图动效）` +
     ` → 配音 → 质检 → 合成。预估 ${'¥'}${cost.toFixed(2)}。` +
