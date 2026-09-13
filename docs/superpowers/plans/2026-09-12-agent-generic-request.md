@@ -398,6 +398,15 @@ describe('planWorkflow —— subject 必须到达图像与视频提示词', () 
     expect(res.reply.length).toBeGreaterThan(0);
   });
 
+  it('营销澄清路径不得再把哨兵词「高性价比」写进节点参数', () => {
+    // Task 1 第 3 轮审查的 Critical：planWorkflow 从不读 needsClarify，
+    // 于是 marketing + product='' 时会写出 `痛点开场：，清爽，高性价比，竖屏特写`。
+    // 澄清短路落地后必须为「零节点」，因此这里同时断言「不落节点」与「无哨兵词」。
+    const res = planWorkflow(emptyGraph(), '给我做一个产品宣传视频');
+    expect(res.patch.ops.length).toBe(0);
+    expect(JSON.stringify(res.patch.ops)).not.toContain('高性价比');
+  });
+
   it('voiceId 不再硬编码非法音色 qingxin', () => {
     const res = planWorkflow(emptyGraph(), '帮我生成一个小男孩在雨中奔跑的视频');
     expect(JSON.stringify(addedNodes(res))).not.toContain('qingxin');
