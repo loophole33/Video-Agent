@@ -85,7 +85,7 @@ COPY_SKILL = SkillSpec(
 
 STORYBOARD_SKILL = SkillSpec(
     key="mva.script.storyboard",
-    version="1.2.0",
+    version="1.3.0",
     title="分镜脚本生成",
     capability="llm",
     temperature=0.6,
@@ -94,7 +94,7 @@ STORYBOARD_SKILL = SkillSpec(
         "type": "object",
         "required": ["brief"],
         "properties": {
-            "brief": {"type": "object"},
+            "brief": {"type": "object", "description": "含 product/subject/platform/duration_s/style 等；subject 为画面主体（通用请求）"},
             "copy": {"type": "object"},
             "target_duration_s": {"type": "integer"},
             "shot_count": {"type": "integer"},
@@ -108,7 +108,7 @@ STORYBOARD_SKILL = SkillSpec(
             "narration_full": {"type": "string"},
             "shots": {
                 "type": "array",
-                "minItems": 3,
+                "minItems": 1,
                 "maxItems": 12,
                 "items": {
                     "type": "object",
