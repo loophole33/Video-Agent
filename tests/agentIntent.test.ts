@@ -36,6 +36,8 @@ describe('extractSubject —— 从原话提取画面内容', () => {
     // 二者合并 → '气泡水抖音种草'。营销词不进**动词前**的内容位，这是 Task 1 的边界。
     // 注意：tail 里的营销话术仍在返回值中，属于 Task 2 的逐镜提示词模板问题（计划 Task 2 处理），
     // 不在此处假装已解决 —— 故此处钉死 Task 1 的真实行为。
+    // TODO(Task 2)：营销尾巴「抖音种草」被 head/tail 合并带进来了。当前对管线不可见
+    // （isMarketing 时 subject 被清空），但 Task 2 落地澄清短路后应重新审视此断言。
     expect(extractSubject('给这款气泡水做一个抖音种草视频，20秒，突出清爽解渴')).toBe('气泡水抖音种草');
   });
 
@@ -256,5 +258,79 @@ describe('Task 1 复审五修回归（信封合并 / 中文时长 / 哨兵泄漏
     const b = parseBrief('给这款气泡水做一个抖音种草视频，20秒，突出清爽解渴');
     expect(b.usp).toContain('清爽解渴');
     expect(b.usp).not.toContain('高性价比');
+  });
+});
+
+describe('Task 1 第三轮复审（复合时长 / 把字句帧 / 死分支清理）', () => {
+  it('复合时长不留残渣：「生成一个10秒钟的视频」', () => {
+    expect(extractSubject('生成一个10秒钟的视频')).toBeNull();
+    expect(parseBrief('生成一个10秒钟的视频').needsClarify).toBe(true);
+  });
+
+  it('复合时长不留残渣：「生成一个20秒钟的视频」', () => {
+    expect(extractSubject('生成一个20秒钟的视频')).toBeNull();
+    expect(parseBrief('生成一个20秒钟的视频').needsClarify).toBe(true);
+  });
+
+  it('「两分半钟」整体被剥掉（不得残留「半钟」当画面内容）', () => {
+    const s = extractSubject('给我做一个两分半钟的视频');
+    expect(s).not.toBe('半钟');   // 残渣形态（s 为 null 时 not.toBe 仍成立）
+    expect(s).toBeNull();
+    expect(parseBrief('给我做一个两分半钟的视频').needsClarify).toBe(true);
+  });
+
+  it('「两分半」整体被剥掉（不得残留「半」当画面内容）', () => {
+    const s = extractSubject('做一个两分半的视频');
+    expect(s).not.toBe('半');   // 残渣形态（s 为 null 时 not.toBe 仍成立）
+    expect(s).toBeNull();
+    expect(parseBrief('做一个两分半的视频').needsClarify).toBe(true);
+  });
+
+  it('「一分半的猫咪视频」：时长剥净，猫咪**必须存活**（不得只剩「半的猫咪」）', () => {
+    const s = extractSubject('做一个一分半的猫咪视频');
+    expect(s).toBe('猫咪');
+    expect(s).toContain('猫咪');
+    expect(s).not.toContain('半');
+    const b = parseBrief('做一个一分半的猫咪视频');
+    expect(b.subject).toBe('猫咪');
+    expect(b.needsClarify).toBe(false);
+  });
+
+  it('反过度吞噬：量词+时长+量词（两分半钟入类）只剩余时长 → 澄清', () => {
+    // 反过度吞噬：剥完只剩时长必须 return null。「两分半钟/两分半」是第三轮新增的复合形。
+    expect(extractSubject('做一个两分半钟的视频')).toBeNull();
+    expect(extractSubject('做一条两分半的视频')).toBeNull();
+    expect(extractSubject('生成一个二十分钟的视频')).toBeNull();
+  });
+
+  it('既有反过度吞噬用例全部保持：3D动画 / 5G手机 / 4K风景 / 24fps', () => {
+    expect(extractSubject('生成一个3D动画的视频')).toBe('3D动画');
+    expect(extractSubject('生成一个5G手机的视频')).toBe('5G手机');
+    expect(extractSubject('生成一个4K风景的视频')).toBe('4K风景');
+    expect(extractSubject('生成一个24fps的视频')).toBe('24fps');
+  });
+
+  it('把字句帧必须澄清：「帮我把猫咪做成视频」', () => {
+    expect(extractSubject('帮我把猫咪做成视频')).not.toBe('把猫咪做成');
+    expect(extractSubject('帮我把猫咪做成视频')).toBeNull();
+    expect(parseBrief('帮我把猫咪做成视频').needsClarify).toBe(true);
+  });
+
+  it('把字句帧必须澄清：「帮我把小男孩在雨中奔跑拍成视频」', () => {
+    expect(extractSubject('帮我把小男孩在雨中奔跑拍成视频')).not.toBe('把小男孩在雨中奔跑拍成');
+    expect(extractSubject('帮我把小男孩在雨中奔跑拍成视频')).toBeNull();
+    expect(parseBrief('帮我把小男孩在雨中奔跑拍成视频').needsClarify).toBe(true);
+  });
+
+  it('把字句帧必须澄清：「把猫咪在雨中奔跑做成视频」', () => {
+    expect(extractSubject('把猫咪在雨中奔跑做成视频')).not.toBe('把猫咪在雨中奔跑做成');
+    expect(extractSubject('把猫咪在雨中奔跑做成视频')).toBeNull();
+    expect(parseBrief('把猫咪在雨中奔跑做成视频').needsClarify).toBe(true);
+  });
+
+  it('反过度吞噬：只拒绝「整段残余恰好是把字句帧」，更长残余不误杀', () => {
+    // 锚定 ^…$ 对整串生效，故以「把」开头但不止于「做成/拍成」的残余必须放行。
+    // 这同时是已知边界：把字句宾语回填不做（新机制、会引入静默丢内容），只做整帧拒绝。
+    expect(extractSubject('把猫咪做成花的视频')).toBe('把猫咪做成花');
   });
 });
