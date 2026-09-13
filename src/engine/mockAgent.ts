@@ -14,8 +14,12 @@ export interface AgentResult {
   action?: 'run';
 }
 
-interface Brief {
+export interface Brief {
   product: string;
+  subject: string;          // 用户真正要拍的内容（通用请求）；营销请求为空串
+  isMarketing: boolean;
+  needsClarify: boolean;    // 提取不到主体 → 反问澄清，而不是编占位内容
+  explicitDuration: boolean;
   durationS: number;
   platform: string;
   tone: string;
@@ -32,26 +36,80 @@ const PLATFORMS = [
 
 const TONES = ['清爽', '高端', '温情', '热血', '幽默', '专业'];
 
-export function parseBrief(text: string): Brief {
-  const duration = text.match(/(\d{1,3})\s*(?:s|秒)/i);
-  const product =
+const MARKET_KEYS =
+  /种草|带货|卖点|转化|投放|推广|营销|商品|产品|品牌|价格|促销|优惠|折扣|销量|下单|购买|链接|优惠券/;
+const MARKET_VERB = /(?:种草|带货|推广|营销|宣传)\s*(?:视频|短片|素材)/;
+
+/** 显式产品名（无则为 null，不回落到哨兵字面量） */
+export function extractProduct(text: string): string | null {
+  return (
     text.match(/给(?:这款|这个|我的)?\s*([^\s，。,]{1,14}?)\s*(?:做|拍|来)/)?.[1] ??
     text.match(/(?:产品|商品)[：:]\s*([^\s，。,]{1,14})/)?.[1] ??
-    '产品';
+    null
+  );
+}
+
+/**
+ * 从原话提取画面内容：锚定媒体名词，再逐层剥掉动词/量词壳。
+ * 注意「做」也必须是合法动词 —— 第一版只允许「生成/拍」，实测漏掉「帮我做一段猫咪打哈欠的视频」。
+ */
+export function extractSubject(text: string): string | null {
+  const m = text.match(/^(.*?)\s*(?:的)?\s*(?:视频|短片|图片|图像|画面|片段)/);
+  let s = m ? m[1] : '';
+  // 先剥营销外壳：只取动作动词「之前」的部分。否则整句营销话术会被当成画面内容返回
+  // （实测：'给这款气泡水做一个抖音种草视频' 原本返回 '抖音种草'，把营销词当成了画面主体）
+  s = /^给\s*(?:我)?[^，。,\s]{0,16}?(?:做|拍|制作|来)(?=[\s一个段条张的]|$)/.test(s)
+    ? s.replace(/^(给\s*(?:我)?[^，。,\s]{0,16}?)\s*(?:做|拍|制作|来)(?=[\s一个段条张的]|$)[\s\S]*$/, '$1')
+    : s;
+  s = s.replace(/^(?:帮我|请|麻烦|我要|我想|想要|来|给我)+/g, '');
+  s = s.replace(/^给(?:这款|这个|我的)?/g, '');
+  s = s.replace(/^(?:生成|做|制作|拍|出|画|来)+/g, '');
+  s = s.replace(/^(?:一个|一段|一条|一张|个|段|条|张)/g, '');
+  // 兜底：剥完壳只剩时长（如「做条 20s 视频」→ '20s'）＝用户根本没说要拍什么，
+  // 必须返回 null 让 parseBrief 走 needsClarify，绝不能把 '20s' 当画面内容写进提示词。
+  // 只剥带单位的时长，避免误伤「3D动画」这类真内容。
+  if (!s.replace(/[\d.]+\s*(?:s|秒|min|分钟|mins|seconds?)/gi, '').replace(/[\s,，。、]/g, '')) return null;
+  return s.trim() || null;
+}
+
+export function parseBrief(text: string): Brief {
+  const duration = text.match(/(\d{1,3})\s*(?:s|秒)/i);
+  const explicitDuration = !!duration;
+  const productRaw = extractProduct(text);
+  const isMarketing = MARKET_KEYS.test(text) || MARKET_VERB.test(text) || !!productRaw;
+
+  const subject = isMarketing ? '' : (extractSubject(text) ?? '');
+  // 哨兵修正：营销但拿不到 product 时不再回落到字面量 '产品'
+  const product = productRaw ?? (isMarketing ? '' : (subject || ''));
+  const needsClarify = !product && !subject;
+
   const uspRaw = text.match(/突出\s*([^，。,]{1,20})/)?.[1];
   const usp = uspRaw ? uspRaw.split(/[、和与,]/).map((s) => s.trim()).filter(Boolean) : [];
   const platform = PLATFORMS.find((p) => p.match.test(text))?.key ?? 'douyin';
   const tone = TONES.find((t) => text.includes(t)) ?? '清爽';
   const cheap = /便宜|省钱|低预算|成本低|抠一点/.test(text);
-  const dur = duration ? Math.min(180, Math.max(5, Number(duration[1]))) : 20;
+
+  // 时长与镜数：营销保持旧默认（20s / ≥3 镜）；通用按内容定（无时长 → 5s / 1 镜）
+  const rawDur = duration ? Math.min(180, Math.max(5, Number(duration[1]))) : null;
+  const dur = rawDur ?? (isMarketing ? 20 : 5);
+  const shots = isMarketing
+    ? Math.min(12, Math.max(3, Math.round(dur / 4.2)))
+    : rawDur
+      ? Math.min(12, Math.max(1, Math.round(dur / 4.2)))
+      : 1;
+
   return {
     product,
+    subject,
+    isMarketing,
+    needsClarify,
+    explicitDuration,
     durationS: dur,
     platform,
     tone,
     usp: usp.length ? usp : ['高性价比'],
     cheap,
-    shots: Math.min(12, Math.max(3, Math.round(dur / 4.2))),
+    shots,
   };
 }
 
