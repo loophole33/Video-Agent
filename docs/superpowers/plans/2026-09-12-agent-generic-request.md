@@ -183,14 +183,25 @@ export function extractProduct(text: string): string | null {
     text.match(/(?:产品|商品)[：:]\s*([^\s，。,]{1,14})/)?.[1] ??
     null;
   if (!raw) return null;
-  // 代词剥壳：否则「给我拍一个小男孩在雨中奔跑的视频」会把「我」当成产品名，
-  // 进而把请求误判为营销 → subject 被清空 → 用户内容彻底丢失（Task 1 审查发现）
-  const cleaned = raw.replace(/^(?:我|我们|你|您|他|她|它|们)+/g, '').trim();
-  return cleaned || null;
+  const t = raw.trim();
+  // 仅在「整个捕获就是代词」时判空。不要做通用 replace ——
+  // 否则「给我们的猫拍一个视频」会被削成「的猫」，反而把真实名字弄坏（Task 1 复审发现）
+  if (/^(?:我|我们|你|您|他|她|它|们)+$/.test(t)) return null;
+  // 用户自己说的占位词不算「提取到内容」，否则 sentinel 规则形同虚设（Task 1 复审发现）
+  if (/^(?:这款|这个)?(?:产品|商品)$/.test(t)) return null;
+  return t || null;
 }
 
-/** 时长壳：阿拉伯数字 + 中文数字 + 无单位裸数字（Task 1 审查发现「做条一分钟的视频」曾漏网） */
-const DUR_SHELL = /^(?:\d+(?:\.\d+)?\s*(?:s|秒|分钟|分|min)?|[一二两三四五六七八九十百]+(?:秒|分钟|分))$/i;
+/** 时长壳：阿拉伯数字 + 中文数字 + 无单位裸数字 */
+const DUR_SHELL =
+  /^(?:\d+(?:\.\d+)?\s*(?:s|秒|分钟|分|min)?|[一二两三四五六七八九十百千万零]+(?:秒|分钟|分))$/i;
+
+/** 句首时长短语：从 subject 里剥掉，而不是让它变成画面内容（Task 1 复审发现） */
+const LEADING_DUR =
+  /^(?:\d+(?:\.\d+)?\s*(?:s|秒|分钟|分|min)|[一二两三四五六七八九十百千万零]+(?:秒|分钟|分))\s*(?:的)?/i;
+
+/** 量词壳（剥掉后不构成主体）。刻意不含「只」——保守，宁可多留字 */
+const LEADING_QUANT = /^(?:一个|一段|一条|一张|个|段|条|张)/;
 
 /**
  * 从原话提取画面内容：锚定媒体名词，再逐层剥掉动词/量词壳。
@@ -198,20 +209,37 @@ const DUR_SHELL = /^(?:\d+(?:\.\d+)?\s*(?:s|秒|分钟|分|min)?|[一二两三�
  */
 export function extractSubject(text: string): string | null {
   const m = text.match(/^(.*?)\s*(?:的)?\s*(?:视频|短片|图片|图像|画面|片段)/);
-  let s = m ? m[1] : '';
-  s = s.replace(/^(?:帮我|请|麻烦|我要|我想|想要|来|给我)+/g, '');
-  // 信封剥壳：仅当捕获段在剥掉代词后仍有内容时才削掉（否则「给我制作一个猫咪视频」会把内容吞掉）
-  const env = s.match(/^给\s*(我)?[^，。,\s]{0,16}?(?:做|拍|制作|来)(?=[\s一个段条张的]|$)/);
+  const raw = m ? m[1] : '';
+  const env = raw.match(/^(给\s*(?:我)?[^，。,\s]{0,16}?)\s*(?:做|拍|制作|来)(?=[\s一个段条张的]|$)/);
+
+  let s: string;
   if (env) {
-    const inner = (env[1] ?? '')
-      .replace(/^(?:我|我们|你|您|他|她|它|们)+/g, '')
+    // 动词前段：剥掉「给/这款/代词」，剩下的才是主体
+    const head = env[1]
+      .replace(/^给\s*/, '')
+      .replace(/^(?:这款|这个|我的)/, '')
+      .replace(/^(?:我|我们|你|您|他|她|它|们)/, '')
       .trim();
-    if (inner) s = s.slice(env[0].length);
+    // 动词后段：剥掉量词壳与时长短语后剩下的才是主体
+    const tail = raw
+      .slice(env[0].length)
+      .replace(LEADING_QUANT, '')
+      .replace(LEADING_DUR, '')
+      .trim();
+    // 两段都可能是主体 → **合并而不是丢弃**
+    // 「给猫咪制作一个在雨中奔跑的视频」head='猫咪' tail='在雨中奔跑'，
+    // 丢掉任一段都是静默丢内容（Task 1 复审发现的头号问题）
+    s = head && tail ? `${head}${tail}` : head || tail;
+  } else {
+    s = raw;
   }
+
+  s = s.replace(/^(?:帮我|请|麻烦|我要|我想|想要|来|给我)+/g, '');
+  s = s.replace(/^给(?:这款|这个|我的)?/g, '');
   s = s.replace(/^(?:生成|做|制作|拍|出|画|来)+/g, '');
-  s = s.replace(/^(?:一个|一段|一条|一张|个|段|条|张)/g, '');
+  s = s.replace(LEADING_QUANT, '');
+  s = s.replace(LEADING_DUR, '');
   const out = s.trim();
-  // 兜底：整个残余就是一个时长（中文数字也算），不得当时长以外的内容写出去
   return !out || DUR_SHELL.test(out) ? null : out;
 }
 
@@ -250,7 +278,8 @@ export function parseBrief(text: string): Brief {
     durationS: dur,
     platform,
     tone,
-    usp: usp.length ? usp : ['高性价比'],
+    // 通用请求不得携带哨兵词「高性价比」；营销路径 usp 非空，故行为不变（Task 1 复审发现）
+    usp: usp.length ? usp : isMarketing ? ['高性价比'] : [],
     cheap,
     shots,
   };
@@ -419,7 +448,7 @@ Expected: FAIL — 多条断言不成立（提示词里没有「小男孩在雨�
 ```ts
         prompt: b.subject
           ? `${b.subject}，${label}，${b.tone}，竖屏特写`
-          : `${label}：${b.product}，${b.tone}，${b.usp[0]}，竖屏特写`,
+          : `${label}：${b.product}，${b.tone}，${b.usp[0] ?? ''}，竖屏特写`,
 ```
 
 **(d) 视频提示词：subject 优先**（替换 `:161`）：
