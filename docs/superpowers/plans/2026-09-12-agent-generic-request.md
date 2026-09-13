@@ -589,6 +589,122 @@ git commit -m "feat(skills): storyboard 1.3.0 supports content-first narrative; 
 
 ---
 
+### Task 3.5: 适配 wan2.7-i2v（用户换模型后 i2v 全挂）
+
+**背景（实测，非推测）**：用户把 `MVA_VIDEO_MODEL` 从 `wan2.2-i2v-plus` 换成 `wan2.7-i2v`
+（前者额度用光）。适配器里对 wan 系列的硬假设随之失效，**i2v 已经完全不能用**。
+
+证据（`apps/api/scripts/probe_wan27_params.py` + `probe_wan27_params2.py`，真实端点）：
+
+| 形状 | 提交 | **终态** | 说明 |
+|---|---|---|---|
+| A 旧形状 `input.img_url`（**当前适配器**） | HTTP 200 | **FAILED** `Field required: input.media` | 提交被接受，render 阶段才拒 |
+| B 新形状 `input.media[{type:'first_frame',url}]` | HTTP 200 | **SUCCEEDED** | 正确形状 |
+| C media + duration=3 | HTTP 200 | CANCELED（免费） | 2–15s 档位被接受 |
+| D media + duration=7 | HTTP 200 | **SUCCEEDED** | 非 5/10 档也有效 |
+| E media + `negative_prompt` | HTTP 200 | **SUCCEEDED** | 该参数在 wan2.7 仍有效，可保留 |
+| F media + duration=15 | HTTP 200 | **SUCCEEDED** | 新上限 15 可用 |
+
+**关键陷阱**：DashScope 视频接口是**异步**的，`POST` 对无效参数也返回 200，
+错误只在 `GET /tasks/{id}` 的 `task_status=FAILED` 里出现。所以「提交成功」不构成「参数正确」。
+
+**Files:**
+- Modify: `apps/api/mva/adapters/video/dashscope_video.py`（首帧形状 + 时长档位）
+- Modify: `apps/api/mva/adapters/registry.py`（`max_duration_s` 10 → 15 当模型属 wan2.7）
+- Modify: `apps/api/mva/mock_provider.py`（假厂商需同时认 `media` 与 `img_url`）
+- Modify: `apps/api/scripts/verify_gateway.py`（新增形状断言，防止回退）
+
+**Interfaces:**
+- Produces: `first_frame_input(model, ref) -> dict` —— 按模型族返回 `{"img_url": ...}` 或 `{"media": [...]}`
+- Produces: `allowed_durations(model) -> tuple[int, ...]` —— wan2.7 → `(2..15)`，其余 → `(5, 10)`
+
+- [ ] **Step 1: 让首帧形状按模型族分支**
+
+`dashscope_video.py`，把 `ALLOWED_DURATIONS` 常量替换为按模型判定，并让 `submit` 使用正确的 input 形状：
+
+```python
+# wan2.7 支持 2–15s 连续档位；wan2.2 及更早只接受 5/10。
+# 硬编码 (5, 10) 会把 wan2.7 的 7s 请求夹到 10s，而计费按 duration×单价 → 多收钱。
+LEGACY_DURATIONS = (5, 10)
+NEWGEN_MIN, NEWGEN_MAX = 2, 15
+
+
+def is_newgen(model: str) -> bool:
+    """wan2.7 及以后：media 传参 + 2–15s 连续档位。"""
+    return bool(re.match(r"^wan2\.(7|8|9)", model or ""))
+
+
+def allowed_durations(model: str) -> tuple[int, ...]:
+    return tuple(range(NEWGEN_MIN, NEWGEN_MAX + 1)) if is_newgen(model) else LEGACY_DURATIONS
+
+
+def clamp_duration(seconds: float, model: str = "") -> int:
+    opts = allowed_durations(model)
+    for d in opts:
+        if seconds <= d:
+            return d
+    return opts[-1]
+
+
+def first_frame_input(model: str, ref: str) -> dict:
+    """首帧传参：wan2.7 只认 media 数组；更早的模型用 img_url。
+    （实测：wan2.7 收到 img_url 时提交返回 200，但任务终态是
+      FAILED「Field required: input.media」—— 异步接口的校验延迟。）"""
+    return {"media": [{"type": "first_frame", "url": ref}]} if is_newgen(model) else {"img_url": ref}
+```
+
+`submit` 里：
+
+```python
+        first = to_vendor_ref(req.refs[0]) if req.refs else None
+        duration = clamp_duration(float(req.params.get("durationS", 5)), self.spec.model)
+        payload = {
+            "model": self.spec.model,
+            "input": {
+                "prompt": req.prompt[: self.spec.max_prompt_chars],
+                **({"img_url": first} if first and not is_newgen(self.spec.model)
+                   else (first_frame_input(self.spec.model, first) if first else {})),
+                **({"negative_prompt": req.negative_prompt} if req.negative_prompt else {}),
+            },
+            ...
+```
+
+并把 `fetch` / `estimate_cost` 里两处 `clamp_duration(...)` 调用补上 `self.spec.model` 参数。
+
+- [ ] **Step 2: registry 的时长上限跟着模型走**
+
+`registry.py` 的 VIDEO `ModelSpec`：`max_duration_s=10` 改为按模型决定
+（wan2.7 → 15，否则 10），否则 `/healthz` 会对外谎报上限，前端不会允许 >10s。
+
+- [ ] **Step 3: 假厂商兼容两种形状**
+
+`mock_provider.py:266,290` 目前只读 `inp.get("img_url")`。
+改为 `inp.get("img_url") or (inp.get("media") or [{}])[0].get("url")`，
+否则改成 media 后网关自测链路会拿不到首帧。
+
+- [ ] **Step 4: 在 verify_gateway 里钉住形状，防止回退**
+
+新增断言：带 `first_frame_url` 的视频请求，假厂商收到的 input **必须**含 `media[0].type == 'first_frame'`
+（wan2.7 配置下），且 `task_status` 终态为 SUCCEEDED。这是唯一能自动发现「又发回 img_url」的测试。
+
+- [ ] **Step 5: 跑验证**
+
+```bash
+cd D:\vtest\apps\api; python scripts/verify_gateway.py     # 须 55/55 或更多（新增断言后计数上升）
+```
+
+再跑一次真实 i2v 冒烟（`python scripts/smoke_real_video.py`，若存在）确认终态 SUCCEEDED。
+**只提交不够，必须看终态** —— 这正是本次 bug 的教训。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add apps/api/mva/adapters apps/api/mva/mock_provider.py apps/api/scripts/verify_gateway.py
+git commit -m "fix(video): send first frame via media[] for wan2.7; duration range follows model family"
+```
+
+---
+
 ### Task 4: 逐镜提示词编译
 
 **Files:**
