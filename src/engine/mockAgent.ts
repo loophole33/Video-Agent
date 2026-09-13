@@ -281,6 +281,9 @@ export function planWorkflow(graph: WorkflowGraph, utterance: string): AgentResu
   // usp 槽位渲染：通用请求 usp 为空，若仍写 `${usp[0] ?? ''}，` 会留下双逗号
   // （`小男孩在雨中奔跑，清爽，，竖屏特写`）—— 空槽位残渣不得进提示词。
   // 营销路径 usp 非空，渲染结果与修复前逐字相同（红线）。
+  // 注意：本常量是**纯防御性**的，通用请求下不可达 —— 其唯一消费者是图像提示词的
+  // 非 subject 分支，而该分支仅在 b.subject 为空时运行，此时必为营销请求，营销路径
+  // usp 恒非空（哨兵兜底）。故通用请求永远不会走这里，勿以为它被通用路径覆盖。
   const uspPart = b.usp[0] ? `${b.usp[0]}，` : '';
   for (let i = 0; i < b.shots; i++) {
     const label = shotLabels[i % shotLabels.length];

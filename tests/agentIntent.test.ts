@@ -136,6 +136,32 @@ describe('parseBrief —— 路由', () => {
   });
 });
 
+describe('product 与 subject 的不变量（防止未来漂移）', () => {
+  // 为什么需要这一组：planWorkflow 里 `b.subject ? X : Y` 与 `Y` 的输出在**今天**恒等
+  // （非营销 product 必等于 subject；营销 subject 恒为 ''），于是「谁被用」这件事
+  // 被整条测试套件默默接受了。把这条隐式等价升格为显式契约：
+  // 若 Task 3/4 让 product !== subject（例如让营销句也带 subject，或让 product 独立提取），
+  // 这里会变红，逼作者回去决定 planWorkflow 该用哪一个，而不是静默漂移。
+  it('通用请求：product 恒等于 subject', () => {
+    for (const u of [
+      '帮我生成一个小男孩在雨中奔跑的视频',
+      '生成一个赛博朋克城市夜景的图片',
+      '给我做一段猫咪打哈欠的视频',
+    ]) {
+      const b = parseBrief(u);
+      expect(b.isMarketing).toBe(false);
+      expect(b.product).toBe(b.subject);
+    }
+  });
+
+  it('营销请求：subject 恒为空串', () => {
+    const b = parseBrief('给这款气泡水做一个抖音种草视频，20秒，突出清爽解渴');
+    expect(b.isMarketing).toBe(true);
+    expect(b.subject).toBe('');
+    expect(b.product).toBe('气泡水');
+  });
+});
+
 describe('parseBrief —— 只有时长、没有内容 = 必须澄清（不得把时长当内容）', () => {
   it('「做条 20s 视频」：subject 不是 "20s"，走澄清', () => {
     const b = parseBrief('做条 20s 视频');
@@ -387,11 +413,16 @@ describe('planWorkflow —— subject 必须到达图像与视频提示词', () 
     expect(script!.data.params.brief).toBe('小男孩在雨中奔跑 / douyin / 5s / 清爽');
   });
 
-  it('信封句式：视频/脚本/回复都含尾部内容（才能区分 subject 与 product）', () => {
-    // 自审关键发现：通用句 `帮我生成一个小男孩在雨中奔跑的视频` 下 product === subject
-    // （Task 1 的 product 兜底），因此它**无法区分** (d)(e)(g) 三条编辑与它们的旧版本
-    // —— 实测这三条回退后全套仍全绿。要真正测出 subject 通路，必须用 head≠tail 的信封句：
-    // head='猫咪' → product，tail='在雨中奔跑' → subject。此时旧模板（用 product）会丢掉「在雨中奔跑」。
+  it('信封句式：视频/脚本/回复都含尾部内容', () => {
+    // 【修订】原注释声称本句 head='猫咪' → product、tail='在雨中奔跑' → subject，
+    // 故能「区分 subject 与 product」。**这是错的**：`extractProduct`（mockAgent.ts:46）
+    // 要求捕获后紧跟 `做|拍|来`，而本句是「制作」，故 productRaw === null，product 回落到 subject。
+    // 实测 product === subject === '猫咪在雨中奔跑'，因此把 planWorkflow 里任何 `b.subject`
+    // 换成 `b.product` 都**不会**让本测试变红。
+    // 本测试真正钉住的属性是：**内容（head+tail 合并后的完整主体）存活到视频提示词 / brief / reply**，
+    // 即信封句两段都不得静默丢失（Task 1 头号问题的回归守护）。
+    // 另需诚实记录：subject-vs-product 的**选择**对当今所有可达 utterance 都不可区分
+    // （非营销时 product 必等于 subject；营销时 subject 恒为空串）—— 见下文「不变量」describe。
     const res = planWorkflow(emptyGraph(), '给猫咪制作一个在雨中奔跑的视频');
     const nodes = addedNodes(res);
     expect(JSON.stringify(nodes)).toContain('猫咪');
@@ -402,13 +433,29 @@ describe('planWorkflow —— subject 必须到达图像与视频提示词', () 
     expect(res.reply).toContain('我按「猫咪在雨中奔跑 · douyin · 5s · 清爽」');
   });
 
+  it('通用请求带「突出X」时 brief 不带卖点尾巴（(e) 编辑的可观测差异）', () => {
+    // 这条是 (e) 编辑唯一可观测的差异：subject 分支丢掉了 `/ 卖点：…` 尾巴。
+    // 原报告称「(d)/(e)/(g) 对任何可达 utterance 都行为等价、无测试可使其变红」—— 过宽：
+    // 非营销句只要带 `突出X` 就有非空 usp（本句 usp=['勇敢']），于是 subject 分支（无卖点尾）
+    // 与 product 单模板（带卖点尾）输出不同。若把 mockAgent 的 brief 改回单模板，本测试应变红。
+    const res = planWorkflow(emptyGraph(), '帮我生成一个小男孩在雨中奔跑的视频，突出勇敢');
+    const script = addedNodes(res).find((n: MvaNode) => n.data.type === 'script');
+    expect(String(script?.data.params.brief)).toBe('小男孩在雨中奔跑 / douyin / 5s / 清爽');
+    expect(String(script?.data.params.brief)).not.toContain('卖点');
+  });
+
   it('通用请求：提示词与回复都不含空槽位残渣与哨兵词', () => {
-    // 自审补守护：回复文案与 usp 槽位渲染原先**无任何测试覆盖**（变异 E/G 实测全绿）。
+    // 自审补守护：回复文案原先**无任何测试覆盖**（变异 G/H 实测全绿）。
     const res = planWorkflow(emptyGraph(), '帮我生成一个小男孩在雨中奔跑的视频');
     // 回复让用户一眼看到主体被识别对了（简报 (g)）；回退 (g) 时这条变红
     expect(res.reply).toContain('我按「小男孩在雨中奔跑 · douyin · 5s · 清爽」');
-    // 空 usp 槽位不得留下连续逗号（回退 uspPart 时这条变红；测试 A 的精确断言是第二道闸）
-    expect(JSON.stringify(addedNodes(res))).not.toContain('，，');
+    // 【已删除】原有一条 `expect(JSON.stringify(addedNodes(res))).not.toContain('，，')`，
+    // 注释称它守护 uspPart 回退。**该断言不可能失败**：本句是通用请求 → 图像提示词走
+    // `b.subject` 分支，该分支根本没有 usp 槽位，故 `，，` 无从产生（装饰性断言）。
+    // 「通用路径不留空槽位」已由上文 `toContain('小男孩在雨中奔跑')` 与测试 A 的
+    // `toBe('小男孩在雨中奔跑，建立镜头，清爽，竖屏特写')` 精确钉住 —— 后者严格强于子串否定。
+    // uspPart 真正的消费者是营销分支，而营销提示词已由「回归红线」的 5 条逐字 `toEqual` 钉死。
+    // 故未把该断言改挂营销分支：逐字相等已覆盖「不留双逗号」，再挂一条只是重申。
     expect(res.reply).not.toContain('高性价比');
   });
 
