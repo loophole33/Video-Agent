@@ -42,12 +42,19 @@ const MARKET_VERB = /(?:种草|带货|推广|营销|宣传)\s*(?:视频|短片|�
 
 /** 显式产品名（无则为 null，不回落到哨兵字面量） */
 export function extractProduct(text: string): string | null {
-  return (
+  const raw =
     text.match(/给(?:这款|这个|我的)?\s*([^\s，。,]{1,14}?)\s*(?:做|拍|来)/)?.[1] ??
     text.match(/(?:产品|商品)[：:]\s*([^\s，。,]{1,14})/)?.[1] ??
-    null
-  );
+    null;
+  if (!raw) return null;
+  // 代词剥壳：否则「给我拍一个小男孩在雨中奔跑的视频」会把「我」当成产品名，
+  // 进而把请求误判为营销 → subject 被清空 → 用户内容彻底丢失（Task 1 审查发现）
+  const cleaned = raw.replace(/^(?:我|我们|你|您|他|她|它|们)+/g, '').trim();
+  return cleaned || null;
 }
+
+/** 时长壳：阿拉伯数字 + 中文数字 + 无单位裸数字（Task 1 审查发现「做条一分钟的视频」曾漏网） */
+const DUR_SHELL = /^(?:\d+(?:\.\d+)?\s*(?:s|秒|分钟|分|min)?|[一二两三四五六七八九十百]+(?:秒|分钟|分))$/i;
 
 /**
  * 从原话提取画面内容：锚定媒体名词，再逐层剥掉动词/量词壳。
@@ -58,18 +65,27 @@ export function extractSubject(text: string): string | null {
   let s = m ? m[1] : '';
   // 先剥营销外壳：只取动作动词「之前」的部分。否则整句营销话术会被当成画面内容返回
   // （实测：'给这款气泡水做一个抖音种草视频' 原本返回 '抖音种草'，把营销词当成了画面主体）
-  s = /^给\s*(?:我)?[^，。,\s]{0,16}?(?:做|拍|制作|来)(?=[\s一个段条张的]|$)/.test(s)
-    ? s.replace(/^(给\s*(?:我)?[^，。,\s]{0,16}?)\s*(?:做|拍|制作|来)(?=[\s一个段条张的]|$)[\s\S]*$/, '$1')
-    : s;
+  // 信封剥壳：仅当捕获段在剥掉「给/这款/代词」后仍有内容时才削掉动词之后的部分 ——
+  // 否则「给我制作一个猫咪视频」的信封里只剩代词，削下去会把「一个猫咪」一起吞掉
+  // → extractSubject 返回 null → needsClarify 误判（Task 1 审查发现）
+  const env = s.match(/^(给\s*(?:我)?[^，。,\s]{0,16}?)\s*(?:做|拍|制作|来)(?=[\s一个段条张的]|$)/);
+  if (env) {
+    const kept = env[1]
+      .replace(/^给\s*/, '')
+      .replace(/^(?:这款|这个|我的)/, '')
+      .replace(/^(?:我|我们|你|您|他|她|它|们)+/g, '')
+      .trim();
+    if (kept) s = env[1];
+  }
   s = s.replace(/^(?:帮我|请|麻烦|我要|我想|想要|来|给我)+/g, '');
   s = s.replace(/^给(?:这款|这个|我的)?/g, '');
   s = s.replace(/^(?:生成|做|制作|拍|出|画|来)+/g, '');
   s = s.replace(/^(?:一个|一段|一条|一张|个|段|条|张)/g, '');
-  // 兜底：剥完壳只剩时长（如「做条 20s 视频」→ '20s'）＝用户根本没说要拍什么，
-  // 必须返回 null 让 parseBrief 走 needsClarify，绝不能把 '20s' 当画面内容写进提示词。
-  // 只剥带单位的时长，避免误伤「3D动画」这类真内容。
-  if (!s.replace(/[\d.]+\s*(?:s|秒|min|分钟|mins|seconds?)/gi, '').replace(/[\s,，。、]/g, '')) return null;
-  return s.trim() || null;
+  const out = s.trim();
+  // 兜底：全程剥完壳只剩一个时长（阿拉伯数字/中文数字/无单位裸数字）= 用户根本没说要拍什么，
+  // 必须返回 null 走 needsClarify，绝不能把时长当画面内容写进提示词。
+  // 只在「整个残余就是一个时长」时命中，所以「3D动画」「24fps」这类真内容不受影响。
+  return !out || DUR_SHELL.test(out) ? null : out;
 }
 
 export function parseBrief(text: string): Brief {

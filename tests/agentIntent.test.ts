@@ -109,9 +109,15 @@ describe('parseBrief —— 路由', () => {
   });
 
   it('重复调用结果稳定（防止给 MARKET_KEYS 加 g 标志导致 test() 状态漂移）', () => {
-    const once = parseBrief('给这款气泡水做一个抖音种草视频，20秒');
-    const twice = parseBrief('给这款气泡水做一个抖音种草视频，20秒');
-    const thrice = parseBrief('给这款气泡水做一个抖音种草视频，20秒');
+    const once = parseBrief('做一条猫咪视频');
+    const twice = parseBrief('做一条猫咪视频');
+    const thrice = parseBrief('做一条猫咪视频');
+    // 断言具体值，而不是三次调用互相比对 —— 确定性函数永远等于自己，那样等于什么都没断言
+    for (const b of [once, twice, thrice]) {
+      expect(b.subject).toBe('猫咪');
+      expect(b.isMarketing).toBe(false);
+      expect(b.needsClarify).toBe(false);
+    }
     expect(once).toEqual(twice);
     expect(twice).toEqual(thrice);
   });
@@ -132,5 +138,44 @@ describe('parseBrief —— 只有时长、没有内容 = 必须澄清（不得�
 
   it('但带数字的真内容不被误伤（3D 动画是画面内容）', () => {
     expect(extractSubject('生成一个3D动画的视频')).toBe('3D动画');
+  });
+});
+
+describe('代词与内容保全（Task 1 审查发现）', () => {
+  it('「给我拍…」不得把「我」当成产品名而丢掉内容', () => {
+    const b = parseBrief('给我拍一个小男孩在雨中奔跑的视频');
+    expect(b.isMarketing).toBe(false);
+    expect(b.subject).toBe('小男孩在雨中奔跑');
+    expect(b.product).not.toBe('我');
+  });
+
+  it('「给我做一个猫咪视频」同样不得丢内容', () => {
+    const b = parseBrief('给我做一个猫咪视频');
+    expect(b.isMarketing).toBe(false);
+    expect(b.subject).toBe('猫咪');
+  });
+
+  it('「给我制作一个猫咪视频」信封剥壳不得吞掉内容', () => {
+    expect(extractSubject('给我制作一个猫咪视频')).toBe('猫咪');
+  });
+
+  it('中文数字时长不得当成内容', () => {
+    expect(extractSubject('做条一分钟的视频')).toBeNull();
+    expect(parseBrief('做条一分钟的视频').needsClarify).toBe(true);
+  });
+
+  it('「二十秒」同样不得当成内容', () => {
+    expect(extractSubject('生成一个二十秒的视频')).toBeNull();
+  });
+
+  it('无单位裸数字时长不得当成内容', () => {
+    expect(extractSubject('做条20视频')).toBeNull();
+  });
+
+  it('含数字/单位的真实主体不得被误杀', () => {
+    expect(extractSubject('生成一个3D动画的视频')).toBe('3D动画');
+    expect(extractSubject('生成一个5G手机的视频')).toBe('5G手机');
+    expect(extractSubject('生成一个4K风景的视频')).toBe('4K风景');
+    expect(extractSubject('生成一个24fps的视频')).toBe('24fps');
   });
 });
