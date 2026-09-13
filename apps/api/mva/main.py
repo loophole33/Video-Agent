@@ -62,7 +62,7 @@ class GenerateVideoRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=1200)
     first_frame_url: str | None = None
     negative_prompt: str | None = None
-    duration_s: int = Field(5, ge=2, le=10)
+    duration_s: int = Field(5, ge=2, le=15)   # wan2.7 支持 2–15s；更早的模型由适配器夹到 5/10
     resolution: str = "1080P"
     tier: str = "T-B"
     seed: int | None = None

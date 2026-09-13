@@ -8,6 +8,11 @@
 首帧可达性（i2v 的真实约束）：厂商需要能访问到参考图。
     · 本地产物（/assets/...）→ 转成 base64 data URI 由厂商接收（DashScope 支持）
     · 若配置了 MVA_VIDEO_PUBLIC_ASSET_BASE（你把产物放到了 CDN/公网）→ 改写成公网 URL 优先使用
+
+首帧**参数形状**按模型族分支（wan2.7 起换成 media 数组，见 first_frame_input）：
+    · wan2.2 及更早 → `input.img_url`（字符串）
+    · wan2.7 及以后 → `input.media = [{"type": "first_frame", "url": ...}]`
+发错形状时提交仍返回 200，只有轮询到终态才会 FAILED，所以形状断言必须验证**终态**。
 """
 from __future__ import annotations
 
@@ -35,15 +40,34 @@ STATUS_MAP = {
 }
 
 
-# wan 系列 i2v 只接受这几个时长；请求 4s 之类的值会被厂商拒绝，所以在这里向上取整到合法档位
-ALLOWED_DURATIONS = (5, 10)
+# wan2.7 支持 2–15s 连续档位；wan2.2 及更早只接受 5/10。
+# 硬编码 (5, 10) 会把 wan2.7 的 7s 请求夹到 10s，而计费按 duration×单价 → 多收钱。
+LEGACY_DURATIONS = (5, 10)
+NEWGEN_MIN, NEWGEN_MAX = 2, 15
 
 
-def clamp_duration(seconds: float) -> int:
-    for d in ALLOWED_DURATIONS:
+def is_newgen(model: str) -> bool:
+    """wan2.7 及以后：media 传参 + 2–15s 连续档位。"""
+    return bool(re.match(r"^wan2\.(7|8|9)", model or ""))
+
+
+def allowed_durations(model: str) -> tuple[int, ...]:
+    return tuple(range(NEWGEN_MIN, NEWGEN_MAX + 1)) if is_newgen(model) else LEGACY_DURATIONS
+
+
+def clamp_duration(seconds: float, model: str = "") -> int:
+    opts = allowed_durations(model)
+    for d in opts:
         if seconds <= d:
             return d
-    return ALLOWED_DURATIONS[-1]
+    return opts[-1]
+
+
+def first_frame_input(model: str, ref: str) -> dict:
+    """首帧传参：wan2.7 只认 media 数组；更早的模型用 img_url。
+    （实测：wan2.7 收到 img_url 时提交返回 200，但任务终态是
+      FAILED「Field required: input.media」—— 异步接口的校验延迟。）"""
+    return {"media": [{"type": "first_frame", "url": ref}]} if is_newgen(model) else {"img_url": ref}
 
 
 def to_vendor_ref(url: str) -> str:
@@ -78,12 +102,13 @@ class DashScopeVideoAdapter(BaseAdapter):
     # ── ① 提交 ──
     async def submit(self, req: GenerationRequest) -> TaskHandle:
         first = to_vendor_ref(req.refs[0]) if req.refs else None
-        duration = clamp_duration(float(req.params.get("durationS", 5)))
+        duration = clamp_duration(float(req.params.get("durationS", 5)), self.spec.model)
+        frame = first_frame_input(self.spec.model, first) if first else {}
         payload = {
             "model": self.spec.model,
             "input": {
                 "prompt": req.prompt[: self.spec.max_prompt_chars],
-                **({"img_url": first} if first else {}),
+                **frame,
                 **({"negative_prompt": req.negative_prompt} if req.negative_prompt else {}),
             },
             "parameters": {
@@ -169,7 +194,7 @@ class DashScopeVideoAdapter(BaseAdapter):
         except httpx.HTTPError as e:
             raise MvaError(ErrorClass.TRANSIENT, f"片段下载失败：{e}", http_status=502) from e
         duration = float(clamp_duration(float(((handle.payload or {}).get("request") or {})
-                                             .get("parameters", {}).get("duration", 5))))
+                                             .get("parameters", {}).get("duration", 5)), self.spec.model))
         return GenerationResult(
             artifacts=[GeneratedImage(data=r.content, mime="video/mp4",
                                       meta={"source_url": video_url, "provider": self.spec.adapter})],
@@ -181,7 +206,8 @@ class DashScopeVideoAdapter(BaseAdapter):
         )
 
     def estimate_cost(self, req: GenerationRequest) -> Decimal:
-        return self.spec.price * Decimal(clamp_duration(float(req.params.get("durationS", 5))))
+        return self.spec.price * Decimal(clamp_duration(float(req.params.get("durationS", 5)),
+                                                        self.spec.model))
 
     def normalize_error(self, exc: Exception) -> MvaError:
         if isinstance(exc, MvaError):

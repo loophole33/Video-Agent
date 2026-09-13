@@ -10,7 +10,7 @@ from .image.openai_compat import OpenAICompatImageAdapter
 from .image.sd_webui import SDWebUIImageAdapter
 from .audio.dashscope_tts import build as build_tts
 from .llm.openai_compat_llm import OpenAICompatLLMAdapter
-from .video.dashscope_video import DashScopeVideoAdapter
+from .video.dashscope_video import DashScopeVideoAdapter, allowed_durations
 
 
 class AdapterRegistry:
@@ -143,7 +143,9 @@ def build_registry() -> AdapterRegistry:
                 adapter="dashscope-video", model=settings.video_model, capability=Capability.VIDEO,
                 price=Decimal(str(settings.price_video_sec)), price_unit="per_second",
                 max_prompt_chars=1200, ratios=("9:16", "16:9", "1:1"),
-                resolutions=("1080P", "720P"), max_duration_s=10,
+                # 时长上限跟着模型族走：wan2.7 支持 2–15s，更早的只有 5/10。
+                # /healthz 会把这里对外播报，写死 10 会让前端以为新模型不能超过 10s。
+                resolutions=("1080P", "720P"), max_duration_s=max(allowed_durations(settings.video_model)),
                 supports_callback=False, supports_seed=True, supports_first_frame=True,
                 supports_negative_prompt=True, concurrency=2, rpm=20, quality_tier="A",
                 note=f"DashScope 视频生成（{settings.video_base_url}）",

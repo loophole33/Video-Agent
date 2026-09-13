@@ -64,6 +64,30 @@ async def get_state() -> dict:
             "history": state.history[-10:], "video_tasks": list(video_tasks.keys())}
 
 
+@router.get("/video-tasks")
+async def get_video_tasks() -> dict:
+    """假厂商收到的视频提交（含首帧形状）—— 自测用它断言「到底发了 img_url 还是 media[]」。
+
+    只回形状与参数，不回 base64 首帧本体，否则响应会被 data URI 撑爆。
+    """
+    out = []
+    for tid, t in video_tasks.items():
+        inp = t.get("input") or {}
+        media = inp.get("media")
+        out.append({
+            "task_id": tid,
+            "model": t.get("model"),
+            "has_img_url": bool(inp.get("img_url")),
+            "media": [{"type": m.get("type"), "url_kind": str(m.get("url", ""))[:24]}
+                      for m in media] if isinstance(media, list) else None,
+            "duration": t.get("duration"),
+            "parameters": t.get("parameters"),
+            "polls": t.get("polls"),
+            "rendered_ok": "video_url" in t,
+        })
+    return {"video_tasks": out[-10:]}
+
+
 # ═══════════════ 图像（OpenAI 兼容） ═══════════════
 
 @router.post("/v1/images/generations")
@@ -263,8 +287,14 @@ async def video_synthesis(request: Request):
     params = body.get("parameters") or {}
     video_tasks[task_id] = {
         "prompt": str(inp.get("prompt", "")),
-        "img_url": inp.get("img_url"),
+        # 首帧两种形状都要认：wan2.2 及更早是 input.img_url，wan2.7 起是 input.media[0].url。
+        # 只认 img_url 的话，适配器一改成 media 形状，自测链路的首帧就静默丢了。
+        "img_url": inp.get("img_url") or (inp.get("media") or [{}])[0].get("url"),
         "duration": float(params.get("duration", 5)),
+        # 原样留存收到的 input，供 verify_gateway 断言形状（防止又发回 img_url）
+        "input": inp,
+        "parameters": params,
+        "model": body.get("model"),
         "polls": 0,
         "fails": mode == "video_fail",
         "stuck": mode == "video_slow",

@@ -14,12 +14,20 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 import httpx
+
+# 以 `python scripts/xxx.py` 直接运行时，sys.path 里只有 scripts/ —— 手动加上 apps/api
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from mva.adapters.image.local_poster import render_poster  # noqa: E402
+from mva.config import settings  # noqa: E402
 
 # Windows 控制台默认 GBK，中文/符号会炸；强制 UTF-8 输出
 for _stream in (sys.stdout, sys.stderr):
@@ -33,6 +41,17 @@ PROMPT = "冰镇气泡水特写，0 糖 0 卡，清爽夏日感"
 
 PASS: list[str] = []
 FAIL: list[str] = []
+CAPS: dict[str, list[dict]] = {}  # /healthz 的 capabilities，供形状断言判断模型族
+
+
+def video_model_caps() -> dict:
+    """取视频适配器的 ModelSpec 播报值（/healthz 的 capabilities.video[0]）。"""
+    return (CAPS.get("video") or [{}])[0]
+
+
+def is_newgen(model: str) -> bool:
+    """与适配器同口径：wan2.7 及以后用 media 数组传首帧 + 2–15s 档位。"""
+    return bool(re.match(r"^wan2\.(7|8|9)", model or ""))
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -113,6 +132,7 @@ async def main() -> int:
         await control(client, "ok", reset=True)  # 开局先清干净，避免上一次的故障注入残留
         print("\n[1] 健康检查与能力清单")
         health = (await client.get(f"{BASE}/healthz")).json()
+        CAPS.update(health.get("capabilities") or {})
         check("healthz 可用", health.get("ok") is True, f"provider={health.get('image_provider')}")
         avail = [a["adapter"] for a in health.get("available", [])]
         check("选型含 openai-compat（真实厂商路径）", "openai-compat" in avail, f"available={avail}")
@@ -276,9 +296,27 @@ async def verify_skills(client: httpx.AsyncClient) -> None:
 async def verify_video(client: httpx.AsyncClient) -> None:
     print("\n[11] 视频生成：异步任务全链路（submit → 轮询 → 真 MP4 → 落盘）")
     await control(client, "ok", reset=True)
+    model = str(video_model_caps().get("model") or "")
+    newgen = is_newgen(model)
+    max_s = int(video_model_caps().get("max_duration_s") or 0)
+    # 时长上限必须跟着模型族播报（wan2.7 → 15）。写死 10 会让前端以为新模型不能超过 10s。
+    check("healthz 的时长上限与模型族一致（wan2.7+ → 15）",
+          max_s >= 15 if newgen else max_s == 10, f'model={model}, max_duration_s={max_s}')
+
+    # 首帧用真实落盘的 PNG：假厂商要能读到它才会去渲染真 MP4（data URI 不被假厂商解析）
+    png = render_poster("冰镇气泡水易拉罐特写，蓝色包装，水珠，夏日清爽", 1080, 1920, 20260912,
+                        tier="I2V-VERIFY", label="I2V VERIFY")
+    stem = hashlib.sha256(png).hexdigest()[:16]
+    ref_rel = f"images/verify/{stem}.png"
+    ref_path = settings.data_dir / ref_rel
+    ref_path.parent.mkdir(parents=True, exist_ok=True)
+    ref_path.write_bytes(png)
+    first_frame_url = f"/assets/{ref_rel}"
+
+    asked = 4  # 请求 4s：wan2.2 夹到 5s，wan2.7 正好落在 2–15 档内
     r = await client.post(f"{BASE}/api/v1/videos/generate", json={
         "prompt": "冰镇气泡水特写，缓慢推近，水珠滑落，清爽夏日感",
-        "first_frame_url": "/assets/../", "duration_s": 4, "resolution": "1080P", "tier": "T-A",
+        "first_frame_url": first_frame_url, "duration_s": asked, "resolution": "1080P", "tier": "T-A",
         "node_id": "n_vid_verify",
     }, timeout=300)
     body = r.json()
@@ -291,12 +329,35 @@ async def verify_video(client: httpx.AsyncClient) -> None:
               f'polls={body["meta"].get("polls")}')
         check("片段尺寸/时长被 ffprobe 探明", art.get("width") == 1080 and art.get("height") == 1920,
               f'{art.get("width")}x{art.get("height")} {art.get("durationMs")}ms')
-        # 请求 4s → 适配器夹到厂商合法档位 5s（wan 只接受 5/10s），计费按夹后的时长
-        check("时长被夹到厂商合法档位并按夹后时长计费", abs(body["meta"]["cost_cny"] - 0.45 * 5) < 1e-6,
-              f'请求 4s → ¥{body["meta"]["cost_cny"]}（0.45×5s）')
+        # 时长按**模型族**夹档后计费：wan2.2 → 5s；wan2.7 → 请求值 4s 原样生效（仍按报出的时长计费）
+        expected_s = float(asked) if newgen else 5.0
+        check(f"时长按模型族夹档并按夹后时长计费（{model or '未知模型'} → {expected_s:g}s）",
+              abs(body["meta"]["cost_cny"] - 0.45 * expected_s) < 1e-6,
+              f'请求 {asked}s → ¥{body["meta"]["cost_cny"]}（0.45×{expected_s:g}s）')
         clip = await client.get(f"{BASE}{art['url']}")
         check("片段可下载且是真 MP4", clip.status_code == 200 and clip.content[4:8] == b"ftyp",
               f'{len(clip.content)} bytes')
+
+        # ── 首帧形状钉子（wan2.7+）：假厂商必须收到 media[0].type == 'first_frame' ──
+        # 只发 input.img_url 时这里会直接红：wan2.7 对错形状的提交也回 200，
+        # 只有任务终态会 FAILED「Field required: input.media」，所以必须验证**终态 + 厂商收到的形状**。
+        tasks = (await client.get(f"{BASE}/mock-provider/video-tasks")).json().get("video_tasks") or []
+        task = tasks[-1] if tasks else {}
+        if newgen:
+            check("假厂商收到的首帧形状是 media[0].type=first_frame",
+                  (task.get("media") or [{}])[0].get("type") == "first_frame" and not task.get("has_img_url"),
+                  f'model={model} media={task.get("media")} has_img_url={task.get("has_img_url")}')
+        else:
+            check("假厂商收到的首帧形状是 input.img_url（旧模型族）",
+                  task.get("has_img_url") is True, f'model={model} has_img_url={task.get("has_img_url")}')
+        check("厂商收到的首帧地址非空（形状没把首帧弄丢）",
+              bool((task.get("media") or [{}])[0].get("url_kind")) or bool(task.get("has_img_url")),
+              f'media={task.get("media")}')
+        check("厂商收到的时长是模型族合法档位",
+              float(task.get("duration") or 0) in (range(2, 16) if newgen else (5, 10)),
+              f'duration={task.get("duration")}')
+        check("任务在厂商侧到达 SUCCEEDED 终态（已渲染出片段）",
+              task.get("rendered_ok") is True, f'rendered_ok={task.get("rendered_ok")}')
 
     print("\n[12] 视频任务失败 → 归类为内容审核阻断（不重试）")
     await control(client, "video_fail", times=1, reset=True)

@@ -239,7 +239,9 @@ export const videoSpec: NodeTypeSpec = {
       ],
     },
     { key: 'tier', label: '档位', kind: 'select', affectsCost: true },
-    { key: 'durationS', label: '时长', kind: 'slider', min: 2, max: 10, step: 1, affectsCost: true },
+    // 上限 15：网关 /healthz 的 max_duration_s 跟着模型族走（wan2.7+ → 15），
+    // 旧模型族仍由适配器夹回 5/10 —— 前端不要写死比网关更窄的档位，否则新模型能力用不上。
+    { key: 'durationS', label: '时长', kind: 'slider', min: 2, max: 15, step: 1, affectsCost: true },
     { key: 'motionStrength', label: '运动强度', kind: 'slider', min: 0, max: 1, step: 0.05 },
     { key: 'fps', label: '帧率', kind: 'select', options: [24, 25, 30, 60].map((v) => ({ value: String(v), label: `${v}fps` })) },
   ],
@@ -264,7 +266,7 @@ export const videoSpec: NodeTypeSpec = {
         <Slider
           value={Number(data.params.durationS ?? 4)}
           min={2}
-          max={10}
+          max={15}
           step={1}
           suffix="s"
           onChange={(v) => setParam('durationS', v)}
