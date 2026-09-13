@@ -26,7 +26,7 @@ cd D:\vtest; npm run dev          # → http://localhost:5173
 启动成功的标志（网关启动日志）：
 ```
 MVA 网关 v0.3.0 装配完成：image=openai llm=openai video=dashscope
-  已注册适配器：llm:llm-openai-compat(qwen3.8-flash), image:openai-compat(qwen-image-3.0), video:dashscope-video(wan2.2-i2v-plus), tts:dashscope-tts(qwen3-tts-flash), image:local-poster(...)
+  已注册适配器：llm:llm-openai-compat(qwen3.8-flash), image:openai-compat(qwen-image-3.0), video:dashscope-video(wan2.7-i2v), tts:dashscope-tts(qwen3-tts-flash), image:local-poster(...)
 ```
 配错的值会以 `⚠` 打印，也会出现在 `GET /healthz` 的 `warnings` 里。
 
@@ -40,12 +40,19 @@ MVA 网关 v0.3.0 装配完成：image=openai llm=openai video=dashscope
 |---|---|---|---|---|
 | 图像 | `openai` | `https://ws-xxx.maas.aliyuncs.com/compatible-mode/v1` | `qwen-image-3.0` | 约 **60s/张**，¥0.06/张 |
 | LLM | `openai` | 同一个 MaaS 端点 | `qwen3.8-flash` | 文案/分镜/提示词编译；**必须用非推理模型**，否则 token 花在 reasoning 上、content 为空 |
-| 视频 i2v | `dashscope` | `https://ws-xxx.maas.aliyuncs.com/api/v1` | `wan2.2-i2v-plus` | 异步：submit→轮询→video_url；**约 53s/段**，按 ¥0.45/s×5s=¥2.25/段（价格表可改） |
+| 视频 i2v | `dashscope` | `https://ws-xxx.maas.aliyuncs.com/api/v1` | **`wan2.7-i2v`**（2026-09 由 `wan2.2-i2v-plus` 换入，后者额度用尽） | 异步：submit→轮询→video_url；**约 90–140s/段**，按 ¥0.45/s×5s=¥2.25/段（价格表可改）；**支持 2–15s 连续档位** |
 | 配音 TTS | `dashscope` | `https://ws-xxx.maas.aliyuncs.com/api/v1` | `qwen3-tts-flash` | 音色 `Cherry`；¥0.0009/6 段 |
 
 **接口形状（实测，别再猜）**
 - 图像 / LLM：OpenAI 兼容（`/images/generations`、`/chat/completions`）
 - 视频：DashScope 原生 `POST {base}/services/aigc/video-generation/video-synthesis`（带 `X-DashScope-Async: enable`）+ `GET {base}/tasks/{id}`
+- **视频首帧（分模型族，2026-09 实测）**：
+  - `wan2.7` 及以后：`input.media: [{"type":"first_frame","url":...}]` —— **只认这个**
+  - `wan2.2` 及更早：`input.img_url: ...`
+  - **⚠️ 最容易踩的坑：这个接口是异步的，参数非法时 `POST` 仍返回 HTTP 200，错误只在
+    `GET /tasks/{id}` 的 `task_status=FAILED` 里出现**（`img_url` + wan2.7 → `Field required: input.media`）。
+    所以「提交成功」**不构成**「参数正确」——验证必须看**终态**。
+  - `negative_prompt` 在 wan2.7 上仍有效；`prompt_extend` 有效；duration 2–15 连续。
 - TTS：DashScope 原生 `POST {base}/services/aigc/multimodal-generation/generation` → `output.audio.url`（**OpenAI 兼容的 `/audio/speech` 在该端点 404**）
 - 该 MaaS 端点 `/models` 有 ~249 个模型，**没有视频模型**，但 `/api/v1` 上的 DashScope 原生视频接口是**存在**的（早期误判已纠正）
 
@@ -166,5 +173,5 @@ D:\vtest
 ## 7. 新会话开场白模板（直接粘贴）
 
 > 接手 `D:\vtest` 的 MVA 项目。请先读 `docs/HANDOFF.md`（含现状、服务启动方式、已验证结论、目录职责、已修 bug、下一步候选），
-> 再按需读 `docs/phase-1..9-*.md`。现状：全真实链路已跑通（qwen-image-3.0 + qwen3.8-flash + wan2.2-i2v-plus + qwen3-tts-flash + 本地 FFmpeg）。
+> 再按需读 `docs/phase-1..9-*.md`。现状：全真实链路已跑通（qwen-image-3.0 + qwen3.8-flash + wan2.7-i2v + qwen3-tts-flash + 本地 FFmpeg）。
 > 本次要做的是：**<在这里写你的需求>**。约束：不要重复实现已有能力；改完要跑 `npx tsc --noEmit`、`npm test`、`npm run build`；涉及网关的改动跑 `npm run verify:gateway`。
