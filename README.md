@@ -274,3 +274,7 @@ tests/                               # 114 项前端单测（pure / fileToArtifa
 5. 渲染期间合成节点的进度条停在 100%（真实编码进度需要解析 ffmpeg 的 `-progress` 输出，属下一步）。
 
 ---
+
+## 许可证
+
+[MIT](LICENSE) © 2026 
