@@ -8,24 +8,6 @@
 
 ## 全真实链路实测（用真实厂商 key）
 
-**字号整体放大**（原来的 10px 基线在 1080p 上久看很累）：
-
-| 位置 | 原 | 现 |
-|---|---|---|
-| 段落小标题 `.eyebrow` / 时间码 `.tc` | 10px | **12px** |
-| 节点参数、日志、表格 | 10.5px | **12.5px** |
-| 节点标题 / 面板标题 | 12.5px | **14.5px** |
-| 正文/输入框 | 11.5px | **13.5px** |
-
-同时放大了配套尺寸：顶栏 52→60px、左栏 248→268px、右栏 300→330px、日志面板 186→230px、节点卡 320→352px、端口方块 11→13px。
-
-**面板可随意伸缩**：三条可拖拽分隔条（左栏 / 右栏 / 底部日志），拖动即改、**双击恢复默认**、尺寸存 localStorage；
-左右栏还能整体折叠（折叠后在画布角落出现「▸ 侧栏」「◂ 检查器」按钮）。范围：左栏 200–480px、右栏 260–560px、日志 120–520px。
-
-**多画布**：左栏顶部「画布」列表 —— 新建（空白 / 套用任一模板）、切换、复制、双击重命名、删除、导出/导入 JSON。
-每张画布是**独立的图 + 独立的运行态快照**（节点状态、日志、花费都跟着画布走），来回切换不丢进度，全部持久化到 localStorage（刷新后仍在）。
-运行中的画布不允许切换（执行引擎按节点 id 写运行态，中途换图会串台），会明确提示。
-
 | 快捷键 | 作用 |
 |---|---|
 | `Cmd/Ctrl + Shift + N` | 新建画布 |
@@ -40,9 +22,13 @@
 |---|---|---|
 | 文案 / 分镜 / 提示词编译 | `llm-openai-compat` · `qwen3.8-flash` | 3 版文案 + 6 镜分镜（字幕即文案）+ 一致性词典，¥0.05 |
 | 关键帧 | `openai-compat` · `qwen-image-3.0` | 6/6 真实出图，1080×1920，**约 60s/张**，¥0.06/张 |
-| 视频片段（i2v） | `dashscope-video` · `wan2.2-i2v-plus` | 3 段真片段 5.0s/1072×1920，**53s/段**（轮询 11 次），¥2.25/段 |
+| 视频片段（i2v） | `dashscope-video` · **`wan2.7-i2v`** | 真实 i2v 片段（异步 submit→轮询→取片段→落盘），**支持 2–15s 连续档位**，¥0.45/s |
 | 配音（逐镜） | `dashscope-tts` · `qwen3-tts-flash` | 6 段逐镜语音，各自落在**自己镜头的起点**，¥0.0009 |
 | 合成导出 | `ffmpeg(local)` | 17.5s / 1080×1920 / h264 High + AAC-LC 48kHz 立体声，**-14.6 LUFS / -1.4 dBTP** |
+
+> **视频模型可替换**：适配器层统一契约，换厂商只改 `.env` 三个变量。
+> 上表 342s 的实测用的是 `wan2.2-i2v-plus`；现已换成 `wan2.7-i2v`（单段约 90–140s），
+> 适配器按模型族自动切换首帧传参形状（wan2.7+ 用 `media[]`，更早用 `img_url`）。
 
 **一次全量运行：342s（5.7 分钟）· ¥7.30**（6 图 + 3 段 i2v + LLM + TTS + 合成）。
 成品：`out/demo-full-real.mp4`（12.96 MB，画布 `合成导出` 节点内可直接播放）。
@@ -63,8 +49,8 @@ npm install
 python -m pip install -r apps/api/requirements.txt   # 模型网关依赖（FastAPI/Pillow/httpx）
 npm run api            # 终端 A：模型网关 → http://127.0.0.1:8010
 npm run dev            # 终端 B：画布 + FFmpeg 渲染桥 → http://localhost:5173
-npm test               # 24 个前端纯核心单测
-npm run verify:gateway # 网关行为验证（23 项：重试/降级/阻断/记账）
+npm test               # 前端纯核心单测（114 项）
+npm run verify:gateway # 网关行为验证（60 项：选型/限流重试/降级链/审核阻断/成本记账/异步视频）
 ```
 
 前置：**ffmpeg / ffprobe**（`ffmpeg -version` 可跑）。网关不起也能用——图像节点会回退到占位画面并明确标注。
@@ -114,7 +100,7 @@ MVA_PRICE_OPENAI=0.06        # 单价（¥/张），用于成本账本与预算�
 
 ### 无 Key 如何验证「真实厂商路径」
 
-`npm run verify:gateway`（**23 项全过**）把网关指向自带的假厂商，用真 HTTP 走完整链路并注入故障：
+`npm run verify:gateway`（**60 项全过**）把网关指向自带的假厂商，用真 HTTP 走完整链路并注入故障：
 
 | 场景 | 断言 |
 |---|---|
@@ -131,36 +117,18 @@ MVA_PRICE_OPENAI=0.06        # 单价（¥/张），用于成本账本与预算�
 节点徽标显示 `REAL · openai-compat`；随后 FFmpeg 用这些真实 PNG 出片 → **17.3s / 1080×1920 / 2.17MB / 可播放**；
 网关账本 21 条记录、累计 ¥0.60（含故障注入产生的失败记录）。
 
-### 真 key 实测（qwen-image-3.0）
-
-`6 镜模板`全量运行 **118s / ¥0.72**：6 个图像节点各出一张真实关键帧（¥0.06/张，**单张约 60s**），
-3 个 video 节点各出一段**真 MP4 片段**（本地 FFmpeg，¥0.05/段），合成节点把 **3 段片段 + 3 段关键帧动效**
-拼成 17.3s / 1080×1920 / 8.2MB 成片，字幕来自分镜（libass + Microsoft YaHei 已确认解析成功）。
-
----
-
-## 视频是怎么来的：三条路，别混为一谈
-
-| 路线 | 画面运动来源 | 现在状态 | 需要什么 |
-|---|---|---|---|
-| **A 本地静图动效（T-C）** | FFmpeg `zoompan` 推拉摇移 + xfade 转场 | ✅ **已实现**（video 节点与 compose 都走这条） | 无需任何模型，¥0.05/段 |
-| **B 文生图 + 动效** | 真实 AI 关键帧 + 本地运动 | ✅ **已实现**（`qwen-image-3.0` 出图 → FFmpeg 运动） | 一个图像模型（已有） |
-| **C 图生视频 i2v（T-A/T-B）** | **模型生成的画面运动** | ⏳ 待接线（适配器形状已定，`submit→task_id→轮询/回调→片段URL`） | **视频模型 key**：阿里 wan2.2-i2v / 可灵 Kling / 即梦 Seedance / Vidu 任一 |
-
-> `qwen-image-3.0` 是**文生图**模型——它只出静态图。要"AI 生成的运动"，必须有视频模型（路线 C）。
-
 ### 目标 → 落地顺序
 
 | 步骤 | 状态 | 说明 |
 |---|---|---|
-| 图像真实化 | ✅ 已完成 | `openai-compat` 适配器 + `qwen-image-3.0` |
+| 图像真实化 | ✅ 已完成 | `openai-compat` 适配器 + `qwen-image-3.0`，约 60s/张 |
 | 合成真实化 | ✅ 已完成 | 本地 FFmpeg：多段拼接 / 静帧动效 / 字幕 / BGM / 响度 |
 | 片段真实化 | ✅ 已完成 | video 节点用真实关键帧渲出真 MP4 片段，compose 优先拼接片段 |
-| i2v 真实化 | ⏳ 需视频模型 key | 新增一个异步 video 适配器即可，其余不动 |
-| 文案/分镜真实化 | ⏳ 需 LLM key | 同样是 OpenAI 兼容形状的 chat completions 适配器（现在仍是规则版 mock） |
-| 配音真实化 | ⏳ 需 TTS key | TTS 适配器 + sidechaincompress 闪避（链路已留） |
+| i2v 真实化 | ✅ 已完成 | 异步 video 适配器：`submit → 轮询 → 取片段 → 落盘`，含超时与失败降级 |
+| 文案/分镜真实化 | ✅ 已完成 | 3 个版本化 Skill 走 `llm-openai-compat`，含 JSON Schema 校验 + 修复重试 |
+| 配音真实化 | ✅ 已完成 | `dashscope-tts` 逐镜合成 + sidechaincompress 闪避，输出 cues 供音画对齐 |
 
-
+> 换厂商只需改 `.env` 里的三个变量（provider / base_url / model），代码零改动 —— 这是适配器层的设计目标。
 
 ---
 
@@ -180,19 +148,6 @@ FFmpeg 侧：
    ↓ 返回 /renders/<job>/out.mp4（带 Range，可拖动进度条）
 画布：合成节点内出现一个**真的播放器**，标签显示 `REAL MP4 17.3s · 1080×1920 · 1.45MB`
 ```
-
-**实测数据**（本机 ffmpeg 8.1.1，示例图 6 镜头 / 17.3s）：渲染耗时 ~7s，输出 1.46 MB，519 帧，
-`ffprobe` 复核：`h264 High 1080×1920 30fps 519帧 17.3s` + `aac LC 48kHz stereo`，
-响度 `-14.2 LUFS / -3.8 dBTP`；9 个时间点抽帧 md5 **互不相同**（证明画面真的在动、转场真的生效）。
-
-产物位置：`.mva-renders/<job>/out.mp4`（保留最近 20 个），交付样例：`out/demo-final.mp4`。
-节点日志里会打印**完整的 ffmpeg 命令行**，可直接复制到终端复现。
-
-**为什么把桥挂在 Vite dev server 上**：同源零 CORS、不额外占端口/进程、生产构建不包含（`apply:'serve'`）。
-真实产品里这一段属于后端 `RenderService`（`docs/phase-4 §4.10`、`docs/phase-6 §6.10`）——本桥就是它的最小可用替身，接口形状一致。
-
-**这算不算"生成视频"**：算"合成出真视频"，不算"AI 生成内容"。当前画面来自 Mock 占位帧 + 真实运镜；
-一旦上游换成真实模型产出的 JPEG / 视频片段，这条链路一行不用改（改的是取帧来源）。
 
 ---
 
@@ -216,8 +171,7 @@ FFmpeg 侧：
 | 12 | 导出 JSON → 清空 → 导入 | 图结构完整往返 |
 
 ---
-
-## 已实现（对照设计文档）
+## 已实现
 
 **画布与交互**
 - 无限画布：缩放/平移/框选/多选/吸附（8px 网格）/对齐参考；`onlyRenderVisibleElements` 性能优化
@@ -296,7 +250,7 @@ src/
 ├── panels/{TopBar, LeftRail, Inspector, RunLogPanel, ProposalCard, AgentChat, Overlays}
 └── data/templates.ts                # 3 个内置工作流模板
 tools/ffmpeg-bridge.ts               # ⭐ FFmpeg 渲染桥（Vite dev 中间件，dev-only）
-tests/pure.test.ts                   # 24 个纯核心单测
+tests/                               # 114 项前端单测（pure / fileToArtifact / localImport / agentIntent）
 ```
 
 ---
@@ -320,12 +274,3 @@ tests/pure.test.ts                   # 24 个纯核心单测
 5. 渲染期间合成节点的进度条停在 100%（真实编码进度需要解析 ffmpeg 的 `-progress` 输出，属下一步）。
 
 ---
-
-## 下一步（把"合成"之外的环节也变真）
-
-| 步骤 | 做什么 | 产出 |
-|---|---|---|
-| **2** | 接 1 个真实**文生图** adapter（`BaseAdapter` 子类）+ 一个只做 `POST /runs` / `/webhooks` 的最小 FastAPI 后端 | 真实画面 + 本地 FFmpeg = **可发布的 MP4**，成本约 ¥0.3–0.8/条 |
-| **3** | 接 1 个**视频生成** adapter（i2v，异步 + 回调）+ 对象存储 + 队列 | 真实运镜，按 ¥8 预算做镜头分级配比 |
-| **4** | 接 **TTS**（或本地 CosyVoice/Piper），音轨走 sidechaincompress 闪避 | 真配音 + 真字幕对齐 |
-| **5** | 换掉 `mockEngine`：`POST /runs` + WebSocket（store 归约与事件契约都不用改） | 真后端、断点续跑、幂等键落地 |
