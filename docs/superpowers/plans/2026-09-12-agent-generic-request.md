@@ -178,12 +178,19 @@ const MARKET_VERB = /(?:种草|带货|推广|营销|宣传)\s*(?:视频|短片|�
 
 /** 显式产品名（无则为 null，不回落到哨兵字面量） */
 export function extractProduct(text: string): string | null {
-  return (
+  const raw =
     text.match(/给(?:这款|这个|我的)?\s*([^\s，。,]{1,14}?)\s*(?:做|拍|来)/)?.[1] ??
     text.match(/(?:产品|商品)[：:]\s*([^\s，。,]{1,14})/)?.[1] ??
-    null
-  );
+    null;
+  if (!raw) return null;
+  // 代词剥壳：否则「给我拍一个小男孩在雨中奔跑的视频」会把「我」当成产品名，
+  // 进而把请求误判为营销 → subject 被清空 → 用户内容彻底丢失（Task 1 审查发现）
+  const cleaned = raw.replace(/^(?:我|我们|你|您|他|她|它|们)+/g, '').trim();
+  return cleaned || null;
 }
+
+/** 时长壳：阿拉伯数字 + 中文数字 + 无单位裸数字（Task 1 审查发现「做条一分钟的视频」曾漏网） */
+const DUR_SHELL = /^(?:\d+(?:\.\d+)?\s*(?:s|秒|分钟|分|min)?|[一二两三四五六七八九十百]+(?:秒|分钟|分))$/i;
 
 /**
  * 从原话提取画面内容：锚定媒体名词，再逐层剥掉动词/量词壳。
@@ -193,9 +200,19 @@ export function extractSubject(text: string): string | null {
   const m = text.match(/^(.*?)\s*(?:的)?\s*(?:视频|短片|图片|图像|画面|片段)/);
   let s = m ? m[1] : '';
   s = s.replace(/^(?:帮我|请|麻烦|我要|我想|想要|来|给我)+/g, '');
+  // 信封剥壳：仅当捕获段在剥掉代词后仍有内容时才削掉（否则「给我制作一个猫咪视频」会把内容吞掉）
+  const env = s.match(/^给\s*(我)?[^，。,\s]{0,16}?(?:做|拍|制作|来)(?=[\s一个段条张的]|$)/);
+  if (env) {
+    const inner = (env[1] ?? '')
+      .replace(/^(?:我|我们|你|您|他|她|它|们)+/g, '')
+      .trim();
+    if (inner) s = s.slice(env[0].length);
+  }
   s = s.replace(/^(?:生成|做|制作|拍|出|画|来)+/g, '');
   s = s.replace(/^(?:一个|一段|一条|一张|个|段|条|张)/g, '');
-  return s.trim() || null;
+  const out = s.trim();
+  // 兜底：整个残余就是一个时长（中文数字也算），不得当时长以外的内容写出去
+  return !out || DUR_SHELL.test(out) ? null : out;
 }
 
 export function parseBrief(text: string): Brief {
